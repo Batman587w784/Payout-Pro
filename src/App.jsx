@@ -1,8 +1,19 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { createClient } from '@supabase/supabase-js';
+import Papa from 'papaparse';
 import {
   Plus, ArrowLeft, Trash2, ChevronRight, ChevronUp, ChevronDown,
-  FileText, Users, Building2, Receipt, Printer, DollarSign, Calendar
+  FileText, Users, Building2, Receipt, Printer, DollarSign, Calendar,
+  Upload, LogOut, CheckCircle, Shield
 } from "lucide-react";
+
+// ─── Supabase ─────────────────────────────────────────────────────
+const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY);
+const ADMIN_EMAIL = 'shuffman@tailgateofficial.com';
+
+// ─── Storage ──────────────────────────────────────────────────────
+const loadS = async key => { try { const { data } = await supabase.from('app_data').select('value').eq('key',key).single(); return data ? JSON.parse(data.value) : []; } catch { return []; } };
+const saveS = async (key,val) => { try { await supabase.from('app_data').upsert({key, value: JSON.stringify(val)}); } catch {} };
 
 // ─── Utils ────────────────────────────────────────────────────────
 const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
@@ -16,14 +27,24 @@ const addDays = (date,n) => { const d=new Date(date); d.setDate(d.getDate()+n); 
 const fmtDate = s => { if(!s) return ''; const [y,m,d]=s.split('-'); return `${SM[+m-1]} ${+d}, ${y}`; };
 const initials = name => name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase();
 
-// ─── Storage ──────────────────────────────────────────────────────
-// FOR VERCEL: replace these two functions with:
-//   import { createClient } from '@supabase/supabase-js';
-const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY);
-const loadS = async key => { try { const { data } = await supabase.from('app_data').select('value').eq('key',key).single(); return data ? JSON.parse(data.value) : []; } catch { return []; } };
-const saveS = async (key,val) => { try { await supabase.from('app_data').upsert({key, value: JSON.stringify(val)}); } catch {} };
-const loadS = async key => { try { return JSON.parse(localStorage.getItem(key))||[]; } catch { return []; } };
-const saveS = async (key,val) => { try { localStorage.setItem(key,JSON.stringify(val)); } catch {} };
+// Parse "08-May-2026 14:32:02" → "2026-05-08"
+const parseCSVDate = str => {
+  if (!str) return '';
+  try {
+    const MO={Jan:'01',Feb:'02',Mar:'03',Apr:'04',May:'05',Jun:'06',Jul:'07',Aug:'08',Sep:'09',Oct:'10',Nov:'11',Dec:'12'};
+    const [dp] = str.trim().split(' ');
+    const [dd,mon,yyyy] = dp.split('-');
+    return `${yyyy}-${MO[mon]}-${String(+dd).padStart(2,'0')}`;
+  } catch { return ''; }
+};
+
+// Handles both manual periods (discounts*rate) and CSV periods (totalAmount)
+const periodAmt = p => p.totalAmount !== undefined ? p.totalAmount : (p.discounts * p.ratePerDiscount);
+
+const matchEmployee = (csvName, employees) => {
+  const norm = s => s?.toLowerCase().trim().replace(/\s+/g,' ')||'';
+  return employees.find(e => norm(e.name) === norm(csvName));
+};
 
 // ─── Payment engine ───────────────────────────────────────────────
 function getPayments(empId, deals, assignments) {
@@ -38,7 +59,7 @@ function getPayments(empId, deals, assignments) {
         desc:`${deal.orgName} — ${role==='setter'?'Setter':'Closer'} upfront (25% × ${deal.cardsOrdered} cards @ ${fmt$(rate)})`,
         amount:0.25*deal.cardsOrdered*rate,
         paid:deal.paid?.[`${role}Upfront`]??false,
-        dealId:deal.id, key:`${role}Upfront`
+        dealId:deal.id, payKey:`${role}Upfront`
       });
       deal.monthlyActivations.forEach((act,idx) => {
         if (!act) return;
@@ -51,7 +72,7 @@ function getPayments(empId, deals, assignments) {
           desc:`${deal.orgName} — ${role==='setter'?'Setter':'Closer'} backend ${fmtYM(mYM)} (${act} cards)`,
           amount:0.75*act*rate,
           paid:deal.paid?.[`${role}Backend`]?.[idx]??false,
-          dealId:deal.id, key:`${role}Backend`, idx
+          dealId:deal.id, payKey:`${role}Backend`, idx
         });
       });
     });
@@ -60,8 +81,8 @@ function getPayments(empId, deals, assignments) {
     a.periods.forEach(p => {
       out.push({
         id:`m-${p.id}`, date:p.endDate, type:'merchant',
-        desc:`Merchant discounts — ${fmtDate(p.startDate)} → ${fmtDate(p.endDate)} (${p.discounts} discounts)`,
-        amount:p.discounts*p.ratePerDiscount,
+        desc:`Merchant discounts — ${fmtDate(p.startDate)} → ${fmtDate(p.endDate)} (${p.discounts} deal${p.discounts!==1?'s':''})`,
+        amount:periodAmt(p),
         paid:p.paid, assignmentId:a.id, periodId:p.id
       });
     });
@@ -84,7 +105,7 @@ const HR = () => <div style={{height:'0.5px',background:'var(--color-border-tert
 function ModalWrap({title,onClose,children,wide}) {
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.45)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:200,padding:'20px'}}>
-      <div style={{...CARD,width:'100%',maxWidth:wide?'700px':'500px',maxHeight:'92vh',overflowY:'auto'}}>
+      <div style={{...CARD,width:'100%',maxWidth:wide?'820px':'500px',maxHeight:'92vh',overflowY:'auto',background:'var(--color-background-primary)'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'15px 20px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
           <h3 style={{margin:0,fontSize:'15px',fontWeight:'500'}}>{title}</h3>
           <button onClick={onClose} style={{...BTN(false),padding:'4px 9px',fontSize:'18px',lineHeight:1}}>×</button>
@@ -103,6 +124,307 @@ const EmpPicker = ({employees,value,onChange,label}) => (
     </select>
   </Field>
 );
+
+// ─── LOGIN PAGE ───────────────────────────────────────────────────
+function LoginPage() {
+  const [mode,setMode]=useState('signin');
+  const [email,setEmail]=useState('');
+  const [password,setPassword]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState('');
+  const [success,setSuccess]=useState('');
+
+  const submit = async () => {
+    setError(''); setSuccess(''); setLoading(true);
+    if (mode==='signin') {
+      const {error} = await supabase.auth.signInWithPassword({email,password});
+      if (error) setError(error.message);
+    } else {
+      const {error} = await supabase.auth.signUp({email,password});
+      if (error) setError(error.message);
+      else setSuccess('Account created! You can now sign in.');
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',background:'#f1f5f9'}}>
+      <div style={{width:'100%',maxWidth:'400px'}}>
+        <div style={{textAlign:'center',marginBottom:'28px'}}>
+          <div style={{display:'inline-flex',alignItems:'center',gap:'8px',marginBottom:'6px'}}><Receipt size={24} color="#1D9E75"/><span style={{fontSize:'20px',fontWeight:'600',color:'#0f172a'}}>PayoutPro</span></div>
+          <div style={{fontSize:'14px',color:'#64748b'}}>Tailgate Official Payout Management</div>
+        </div>
+        <div style={{...CARD,padding:'28px',background:'#ffffff'}}>
+          <div style={{display:'flex',gap:'4px',marginBottom:'20px',background:'#f8fafc',borderRadius:'var(--border-radius-md)',padding:'3px'}}>
+            {['signin','signup'].map(m=>(
+              <button key={m} onClick={()=>{setMode(m);setError('');setSuccess('');}} style={{flex:1,padding:'8px',border:'none',borderRadius:'var(--border-radius-md)',cursor:'pointer',fontSize:'13px',fontWeight:'500',fontFamily:'var(--font-sans)',background:mode===m?'#ffffff':'transparent',color:mode===m?'#0f172a':'#64748b',boxShadow:mode===m?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>
+                {m==='signin'?'Sign in':'Create account'}
+              </button>
+            ))}
+          </div>
+          <Field label="Email"><input style={INP} type="email" placeholder="you@example.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()} autoFocus/></Field>
+          <Field label="Password"><input style={INP} type="password" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}/></Field>
+          {error&&<div style={{background:'#FCEBEB',border:'0.5px solid #F09595',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#A32D2D',marginBottom:'14px'}}>{error}</div>}
+          {success&&<div style={{background:'#E1F5EE',border:'0.5px solid #5DCAA5',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#0F6E56',marginBottom:'14px'}}>{success}</div>}
+          <button style={{...BTN(true),width:'100%',justifyContent:'center',padding:'10px',fontSize:'14px',opacity:loading?0.7:1}} onClick={submit} disabled={loading}>
+            {loading?'Please wait…':mode==='signin'?'Sign in':'Create account'}
+          </button>
+          {mode==='signup'&&<div style={{fontSize:'12px',color:'#64748b',textAlign:'center',marginTop:'12px'}}>Your admin needs to add your email to the employee roster before you can see your payouts.</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── EMPLOYEE PORTAL ──────────────────────────────────────────────
+function EmployeePortal({employees,deals,assignments,userEmail,onSignOut}) {
+  const emp = employees.find(e=>e.email?.toLowerCase()===userEmail?.toLowerCase());
+  if (!emp) return (
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',background:'#f1f5f9'}}>
+      <div style={{...CARD,padding:'32px',textAlign:'center',maxWidth:'420px',background:'#ffffff'}}>
+        <Shield size={32} style={{margin:'0 auto 12px',display:'block',color:'#64748b'}}/>
+        <div style={{fontWeight:'500',marginBottom:'8px'}}>Account not linked</div>
+        <div style={{fontSize:'13px',color:'#64748b',marginBottom:'20px'}}>Your email ({userEmail}) hasn't been added to the employee roster yet. Contact your admin at shuffman@tailgateofficial.com.</div>
+        <button style={BTN(false)} onClick={onSignOut}><LogOut size={13}/>Sign out</button>
+      </div>
+    </div>
+  );
+
+  const payments = getPayments(emp.id,deals,assignments);
+  const total  = payments.reduce((s,p)=>s+p.amount,0);
+  const pending = payments.filter(p=>!p.paid).reduce((s,p)=>s+p.amount,0);
+  const paid   = payments.filter(p=>p.paid).reduce((s,p)=>s+p.amount,0);
+
+  return (
+    <div style={{minHeight:'100vh',background:'#f1f5f9',padding:'20px'}}>
+      <div style={{maxWidth:'720px',margin:'0 auto'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'22px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+            <div style={{width:'40px',height:'40px',borderRadius:'50%',background:'#E1F5EE',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:'600',color:'#0F6E56'}}>{initials(emp.name)}</div>
+            <div><div style={{fontWeight:'500',fontSize:'16px'}}>{emp.name}</div><div style={{fontSize:'12px',color:'#64748b'}}>Your payout portal</div></div>
+          </div>
+          <button style={BTN(false)} onClick={onSignOut}><LogOut size={13}/>Sign out</button>
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px',marginBottom:'18px'}}>
+          <Metric label="Total earned" value={fmt$(total)}/>
+          <Metric label="Already paid" value={fmt$(paid)} color="#0F6E56"/>
+          <Metric label="Pending" value={fmt$(pending)} color="#854F0B"/>
+        </div>
+        <div style={CARD}>
+          <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Payment history</span></div>
+          {payments.length===0?(
+            <div style={{padding:'40px',textAlign:'center',color:'var(--color-text-secondary)',fontSize:'13px'}}>No payments yet. Check back once deals are active.</div>
+          ):payments.map(p=>(
+            <div key={p.id} style={{display:'grid',gridTemplateColumns:'auto 1fr auto auto',gap:'14px',alignItems:'center',padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+              <div style={{fontSize:'12px',color:'var(--color-text-secondary)',whiteSpace:'nowrap'}}>{fmtDate(p.date)}</div>
+              <div><div style={{fontSize:'13px',marginBottom:'3px'}}>{p.desc}</div><Badge color={p.type==='upfront'?'amber':p.type==='backend'?'teal':'blue'}>{p.type==='upfront'?'Deal upfront':p.type==='backend'?'Deal backend':'Merchant'}</Badge></div>
+              <div style={{fontFamily:'var(--font-mono)',fontSize:'15px',fontWeight:'500',color:'#0F6E56',whiteSpace:'nowrap'}}>{fmt$(p.amount)}</div>
+              <Badge color={p.paid?'teal':'amber'}>{p.paid?'✓ Paid':'⏳ Pending'}</Badge>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── CSV IMPORT ───────────────────────────────────────────────────
+const TIERS = ['$15','$30','$40','$50','Redacted'];
+const TIER_AMT = {'$15':15,'$30':30,'$40':40,'$50':50,'Redacted':0};
+
+function CSVImportModal({employees,assignments,onSave,onClose}) {
+  const [rows,setRows]=useState([]);
+  const [tiers,setTiers]=useState({});
+  const [startDate,setStartDate]=useState('');
+  const [endDate,setEndDate]=useState('');
+  const [step,setStep]=useState('upload');
+  const [dragOver,setDragOver]=useState(false);
+  const fileRef=useRef();
+
+  const processFile = file => {
+    Papa.parse(file,{header:true,skipEmptyLines:true,complete:result=>{
+      const parsed = result.data.map((row,i)=>({
+        idx:i,
+        repName:(row['Select Tailgate Caller']||'').trim(),
+        business:(row['Business Name']||'').trim(),
+        discountType:(row['Discount Type']||'').trim(),
+        specifics:(row['Enter Discount Specifics (fully write all necessary terms)']||'').trim(),
+        date:parseCSVDate((row['Added Time']||'').trim()),
+      })).filter(r=>r.repName&&r.business);
+      const dates=parsed.map(r=>r.date).filter(Boolean).sort();
+      if(dates.length){setStartDate(dates[0]);setEndDate(dates[dates.length-1]);}
+      const def={};parsed.forEach(r=>{def[r.idx]='$15';});
+      setTiers(def);setRows(parsed);setStep('assign');
+    }});
+  };
+
+  const handleDrop=e=>{e.preventDefault();setDragOver(false);const f=e.dataTransfer.files[0];if(f)processFile(f);};
+  const setAllForRep=(repName,tier)=>{const u={...tiers};rows.filter(r=>r.repName===repName).forEach(r=>{u[r.idx]=tier;});setTiers(u);};
+
+  const byRep={};
+  rows.forEach(r=>{if(!byRep[r.repName])byRep[r.repName]=[];byRep[r.repName].push(r);});
+
+  const repSummary=Object.entries(byRep).map(([repName,repRows])=>({
+    repName,emp:matchEmployee(repName,employees),
+    total:repRows.reduce((s,r)=>s+(TIER_AMT[tiers[r.idx]]||0),0),
+    count:repRows.filter(r=>tiers[r.idx]!=='Redacted').length,
+    rows:repRows
+  }));
+
+  const handleConfirm=()=>{
+    const updated=[...assignments];
+    repSummary.forEach(({repName,emp,total,count,rows:rr})=>{
+      if(!emp)return;
+      const period={id:genId(),startDate,endDate,discounts:count,ratePerDiscount:0,totalAmount:total,source:'csv',paid:false,
+        entries:rr.map(r=>({business:r.business,discountType:r.discountType,specifics:r.specifics,tier:tiers[r.idx],amount:TIER_AMT[tiers[r.idx]]||0,date:r.date}))
+      };
+      const ex=updated.find(a=>a.employeeId===emp.id);
+      if(ex)ex.periods=[...ex.periods,period];
+      else updated.push({id:genId(),employeeId:emp.id,periods:[period]});
+    });
+    onSave(updated);
+  };
+
+  if(step==='upload') return (
+    <ModalWrap title="Import merchant CSV" onClose={onClose} wide>
+      <div onDragOver={e=>{e.preventDefault();setDragOver(true);}} onDragLeave={()=>setDragOver(false)} onDrop={handleDrop} onClick={()=>fileRef.current.click()}
+        style={{border:`2px dashed ${dragOver?'#1D9E75':'var(--color-border-secondary)'}`,borderRadius:'var(--border-radius-lg)',padding:'56px',textAlign:'center',cursor:'pointer',background:dragOver?'#E1F5EE':'var(--color-background-secondary)',transition:'all 0.15s'}}>
+        <Upload size={28} style={{margin:'0 auto 12px',display:'block',color:dragOver?'#0F6E56':'var(--color-text-secondary)'}}/>
+        <div style={{fontWeight:'500',marginBottom:'6px'}}>Drop your CSV here or click to browse</div>
+        <div style={{fontSize:'13px',color:'var(--color-text-secondary)'}}>Tailgate Discount Submission report</div>
+        <input ref={fileRef} type="file" accept=".csv" style={{display:'none'}} onChange={e=>e.target.files[0]&&processFile(e.target.files[0])}/>
+      </div>
+    </ModalWrap>
+  );
+
+  return (
+    <ModalWrap title={`Assign tiers — ${rows.length} rows`} onClose={onClose} wide>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr auto',gap:'10px',alignItems:'flex-end',marginBottom:'14px'}}>
+        <Field label="Period start"><input style={INP} type="date" value={startDate} onChange={e=>setStartDate(e.target.value)}/></Field>
+        <Field label="Period end"><input style={INP} type="date" value={endDate} onChange={e=>setEndDate(e.target.value)}/></Field>
+        <div style={{paddingBottom:'13px',fontSize:'12px',color:'var(--color-text-secondary)'}}>Auto-detected from CSV</div>
+      </div>
+
+      <div style={{display:'flex',gap:'6px',flexWrap:'wrap',marginBottom:'12px',padding:'10px',background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)'}}>
+        {repSummary.map(({repName,emp,total,count})=>(
+          <div key={repName} style={{display:'inline-flex',alignItems:'center',gap:'6px',padding:'4px 10px',background:'var(--color-background-primary)',border:`0.5px solid ${emp?'#5DCAA5':'#EF9F27'}`,borderRadius:'var(--border-radius-md)',fontSize:'12px'}}>
+            <span style={{fontWeight:'500'}}>{repName}</span>
+            <span style={{color:'var(--color-text-secondary)'}}>{count} deals · {fmt$(total)}</span>
+            {!emp&&<span style={{color:'#854F0B',fontSize:'11px'}}>⚠ not in roster</span>}
+          </div>
+        ))}
+      </div>
+
+      <div style={{border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',overflow:'hidden',marginBottom:'14px'}}>
+        <div style={{display:'grid',gridTemplateColumns:'130px 1fr 1fr 110px',padding:'8px 12px',background:'var(--color-background-secondary)',fontSize:'11px',fontWeight:'500',color:'var(--color-text-secondary)'}}>
+          <div>Rep / Date</div><div>Business</div><div>Discount</div><div>Tier</div>
+        </div>
+        <div style={{maxHeight:'360px',overflowY:'auto'}}>
+          {Object.entries(byRep).map(([repName,repRows])=>(
+            <div key={repName}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'6px 12px',background:'#f8fafc',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+                <span style={{fontSize:'12px',fontWeight:'600',color:matchEmployee(repName,employees)?'#0F6E56':'#854F0B'}}>{repName}</span>
+                <div style={{display:'flex',gap:'3px',alignItems:'center'}}>
+                  <span style={{fontSize:'11px',color:'var(--color-text-secondary)',marginRight:'3px'}}>Set all:</span>
+                  {TIERS.map(t=>(
+                    <button key={t} onClick={()=>setAllForRep(repName,t)} style={{padding:'2px 7px',fontSize:'11px',fontFamily:'var(--font-sans)',cursor:'pointer',border:'0.5px solid var(--color-border-secondary)',borderRadius:'4px',background:'transparent',color:t==='Redacted'?'#A32D2D':'#0F6E56'}}>{t}</button>
+                  ))}
+                </div>
+              </div>
+              {repRows.map(r=>(
+                <div key={r.idx} style={{display:'grid',gridTemplateColumns:'130px 1fr 1fr 110px',padding:'8px 12px',borderTop:'0.5px solid var(--color-border-tertiary)',alignItems:'center',fontSize:'13px'}}>
+                  <div style={{fontSize:'11px',color:'var(--color-text-secondary)'}}>{fmtDate(r.date)}</div>
+                  <div style={{paddingRight:'8px'}}>{r.business}</div>
+                  <div style={{fontSize:'12px',color:'var(--color-text-secondary)',paddingRight:'8px'}}>{r.discountType}{r.specifics?` — ${r.specifics}`:''}</div>
+                  <select style={{...INP,padding:'5px 8px',fontSize:'12px',color:tiers[r.idx]==='Redacted'?'#A32D2D':'#0F6E56',fontWeight:'500'}} value={tiers[r.idx]||'$15'} onChange={e=>setTiers({...tiers,[r.idx]:e.target.value})}>
+                    {TIERS.map(t=><option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px',marginBottom:'14px'}}>
+        <Metric label="Total rows" value={rows.length}/>
+        <Metric label="Non-redacted" value={rows.filter(r=>tiers[r.idx]!=='Redacted').length}/>
+        <Metric label="Total payout" value={fmt$(rows.reduce((s,r)=>s+(TIER_AMT[tiers[r.idx]]||0),0))} color="#0F6E56"/>
+      </div>
+
+      {repSummary.some(r=>!r.emp)&&(
+        <div style={{background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#854F0B',marginBottom:'14px'}}>
+          ⚠ Reps marked "not in roster" will be skipped. Add them in the Employees tab first, then re-import.
+        </div>
+      )}
+      <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
+        <button style={BTN(false)} onClick={onClose}>Cancel</button>
+        <button style={BTN(true)} onClick={handleConfirm}>Confirm & save</button>
+      </div>
+    </ModalWrap>
+  );
+}
+
+// ─── PAYMENT QUEUE ────────────────────────────────────────────────
+function PaymentQueue({employees,deals,assignments,onMarkDealPaid,onMarkPeriodPaid}) {
+  const allPending=[];
+  employees.forEach(emp=>{
+    getPayments(emp.id,deals,assignments).filter(p=>!p.paid).forEach(p=>{
+      allPending.push({...p,empName:emp.name,empId:emp.id});
+    });
+  });
+  allPending.sort((a,b)=>a.date.localeCompare(b.date));
+
+  const byEmp={};
+  allPending.forEach(p=>{if(!byEmp[p.empId])byEmp[p.empId]={name:p.empName,pmts:[]};byEmp[p.empId].pmts.push(p);});
+
+  const confirm=p=>{
+    if(p.type==='merchant') onMarkPeriodPaid(p.assignmentId,p.periodId);
+    else onMarkDealPaid(p.dealId,p.payKey,p.idx);
+  };
+
+  return (
+    <div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px',marginBottom:'18px'}}>
+        <Metric label="Pending payments" value={allPending.length}/>
+        <Metric label="Total outstanding" value={fmt$(allPending.reduce((s,p)=>s+p.amount,0))} color="#854F0B"/>
+        <Metric label="Employees owed" value={Object.keys(byEmp).length}/>
+      </div>
+      {allPending.length===0?(
+        <div style={{...CARD,padding:'48px',textAlign:'center',color:'var(--color-text-secondary)'}}>
+          <CheckCircle size={32} style={{margin:'0 auto 12px',display:'block',color:'#1D9E75'}}/>
+          <div style={{fontWeight:'500',marginBottom:'6px'}}>All caught up!</div>
+          <div style={{fontSize:'13px'}}>No pending payments right now</div>
+        </div>
+      ):(
+        <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
+          {Object.entries(byEmp).map(([empId,{name,pmts}])=>{
+            const empTotal=pmts.reduce((s,p)=>s+p.amount,0);
+            return (
+              <div key={empId} style={CARD}>
+                <div style={{display:'flex',alignItems:'center',gap:'12px',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+                  <div style={{width:'36px',height:'36px',borderRadius:'50%',background:'var(--color-background-info)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:'500',color:'var(--color-text-info)',flexShrink:0}}>{initials(name)}</div>
+                  <div style={{flex:1}}><div style={{fontWeight:'500'}}>{name}</div><div style={{fontSize:'12px',color:'var(--color-text-secondary)'}}>{pmts.length} pending payment{pmts.length!==1?'s':''}</div></div>
+                  <Badge color="amber">{fmt$(empTotal)} owed</Badge>
+                </div>
+                {pmts.map(p=>(
+                  <div key={p.id} style={{display:'grid',gridTemplateColumns:'auto 1fr auto auto',gap:'14px',alignItems:'center',padding:'12px 18px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+                    <div style={{fontSize:'12px',color:'var(--color-text-secondary)',whiteSpace:'nowrap'}}>{fmtDate(p.date)}</div>
+                    <div><div style={{fontSize:'13px',marginBottom:'3px'}}>{p.desc}</div><Badge color={p.type==='upfront'?'amber':p.type==='backend'?'teal':'blue'}>{p.type==='upfront'?'Deal upfront':p.type==='backend'?'Deal backend':'Merchant'}</Badge></div>
+                    <div style={{fontFamily:'var(--font-mono)',fontSize:'15px',fontWeight:'500',color:'#0F6E56',whiteSpace:'nowrap'}}>{fmt$(p.amount)}</div>
+                    <button style={{...BTN(true),padding:'6px 12px',fontSize:'12px',whiteSpace:'nowrap'}} onClick={()=>confirm(p)}>
+                      <CheckCircle size={13}/>Mark paid
+                    </button>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ─── EMPLOYEES ────────────────────────────────────────────────────
 function EmployeesView({employees,deals,assignments,onAdd,onDelete}) {
@@ -136,7 +458,11 @@ function EmployeesView({employees,deals,assignments,onAdd,onDelete}) {
               <div key={emp.id} style={{...CARD,padding:'16px',overflow:'visible'}}>
                 <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'12px'}}>
                   <div style={{width:'38px',height:'38px',borderRadius:'50%',background:'var(--color-background-info)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'13px',fontWeight:'500',color:'var(--color-text-info)',flexShrink:0}}>{initials(emp.name)}</div>
-                  <div style={{flex:1}}><div style={{fontWeight:'500',fontSize:'14px'}}>{emp.name}</div><div style={{fontSize:'12px',color:'var(--color-text-secondary)'}}>{s.deals} deal{s.deals!==1?'s':''} · {s.periods} period{s.periods!==1?'s':''}</div></div>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:'500',fontSize:'14px'}}>{emp.name}</div>
+                    {emp.email&&<div style={{fontSize:'11px',color:'var(--color-text-secondary)'}}>{emp.email}</div>}
+                    <div style={{fontSize:'12px',color:'var(--color-text-secondary)'}}>{s.deals} deal{s.deals!==1?'s':''} · {s.periods} period{s.periods!==1?'s':''}</div>
+                  </div>
                   <button onClick={()=>onDelete(emp.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
                 </div>
                 <HR/>
@@ -153,14 +479,20 @@ function EmployeesView({employees,deals,assignments,onAdd,onDelete}) {
   );
 }
 
+// Updated to include email field
 function AddEmployeeModal({onAdd,onClose}) {
   const [name,setName]=useState('');
+  const [email,setEmail]=useState('');
   return (
     <ModalWrap title="Add employee" onClose={onClose}>
-      <Field label="Full name"><input style={INP} placeholder="e.g. Sarah Johnson" value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==='Enter'&&name&&onAdd(name)} autoFocus/></Field>
+      <Field label="Full name"><input style={INP} placeholder="e.g. Sarah Johnson" value={name} onChange={e=>setName(e.target.value)} autoFocus/></Field>
+      <Field label="Email (they'll use this to log in and see their payouts)"><input style={INP} type="email" placeholder="sarah@example.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==='Enter'&&name&&onAdd(name,email)}/></Field>
+      <div style={{background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'var(--color-text-secondary)',marginBottom:'14px'}}>
+        They can go to the site, create an account with this email, and see only their own payouts.
+      </div>
       <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
         <button style={BTN(false)} onClick={onClose}>Cancel</button>
-        <button style={BTN(true)} onClick={()=>name&&onAdd(name)}>Add employee</button>
+        <button style={BTN(true)} onClick={()=>name&&onAdd(name,email)}>Add employee</button>
       </div>
     </ModalWrap>
   );
@@ -344,10 +676,10 @@ function AddPeriodModal({employees,onAdd,onClose}) {
   );
 }
 
-function MerchantRepsView({employees,assignments,onAddPeriod,onTogglePaid,onDeletePeriod,onPayStub}) {
+function MerchantRepsView({employees,assignments,onAddPeriod,onImportCSV,onTogglePaid,onDeletePeriod,onPayStub}) {
   const [openIds,setOpenIds]=useState({});
   const tog=id=>setOpenIds(p=>({...p,[id]:p[id]===false?true:false}));
-  const pendingTotal=assignments.reduce((s,a)=>s+a.periods.filter(p=>!p.paid).reduce((ss,p)=>ss+p.discounts*p.ratePerDiscount,0),0);
+  const pendingTotal=assignments.reduce((s,a)=>s+a.periods.filter(p=>!p.paid).reduce((ss,p)=>ss+periodAmt(p),0),0);
   return (
     <div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px',marginBottom:'18px'}}>
@@ -355,7 +687,8 @@ function MerchantRepsView({employees,assignments,onAddPeriod,onTogglePaid,onDele
         <Metric label="Pending payouts" value={fmt$(pendingTotal)} color="#854F0B"/>
         <Metric label="Total periods" value={assignments.reduce((s,a)=>s+a.periods.length,0)}/>
       </div>
-      <div style={{display:'flex',justifyContent:'flex-end',marginBottom:'12px'}}>
+      <div style={{display:'flex',justifyContent:'flex-end',gap:'8px',marginBottom:'12px'}}>
+        <button style={BTN(false)} onClick={onImportCSV}><Upload size={14}/>Import CSV</button>
         <button style={BTN(true)} onClick={onAddPeriod}><Plus size={14}/>Add period</button>
       </div>
       {assignments.length===0?(
@@ -363,13 +696,16 @@ function MerchantRepsView({employees,assignments,onAddPeriod,onTogglePaid,onDele
           <DollarSign size={32} style={{margin:'0 auto 12px',display:'block',opacity:0.4}}/>
           <div style={{fontWeight:'500',marginBottom:'6px'}}>No merchant periods yet</div>
           <div style={{fontSize:'13px',marginBottom:'16px'}}>Add employees first, then log their discount periods here</div>
-          <button style={BTN(true)} onClick={onAddPeriod}><Plus size={14}/>Add period</button>
+          <div style={{display:'flex',gap:'8px',justifyContent:'center'}}>
+            <button style={BTN(false)} onClick={onImportCSV}><Upload size={13}/>Import CSV</button>
+            <button style={BTN(true)} onClick={onAddPeriod}><Plus size={14}/>Add manually</button>
+          </div>
         </div>
       ):(
         <div style={{display:'flex',flexDirection:'column',gap:'10px'}}>
           {assignments.map(a=>{
             const emp=employees.find(e=>e.id===a.employeeId);
-            const pending=a.periods.filter(p=>!p.paid).reduce((s,p)=>s+p.discounts*p.ratePerDiscount,0);
+            const pending=a.periods.filter(p=>!p.paid).reduce((s,p)=>s+periodAmt(p),0);
             const isOpen=openIds[a.id]!==false;
             return (
               <div key={a.id} style={CARD}>
@@ -381,16 +717,18 @@ function MerchantRepsView({employees,assignments,onAddPeriod,onTogglePaid,onDele
                 </div>
                 {isOpen&&a.periods.length>0&&(
                   <>
-                    <div style={{display:'grid',gridTemplateColumns:'1.6fr 0.7fr 0.7fr 0.7fr 0.9fr auto',padding:'8px 18px',background:'var(--color-background-secondary)',fontSize:'11px',color:'var(--color-text-secondary)',fontWeight:'500'}}>
-                      <div>Period</div><div>Discounts</div><div>Rate</div><div>Amount</div><div>Status</div><div/>
+                    <div style={{display:'grid',gridTemplateColumns:'1.6fr 0.6fr 0.7fr 0.9fr auto',padding:'8px 18px',background:'var(--color-background-secondary)',fontSize:'11px',color:'var(--color-text-secondary)',fontWeight:'500'}}>
+                      <div>Period</div><div>Deals</div><div>Amount</div><div>Status</div><div/>
                     </div>
                     {a.periods.map(p=>{
-                      const amt=p.discounts*p.ratePerDiscount;
+                      const amt=periodAmt(p);
                       return (
-                        <div key={p.id} style={{display:'grid',gridTemplateColumns:'1.6fr 0.7fr 0.7fr 0.7fr 0.9fr auto',padding:'12px 18px',alignItems:'center',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
-                          <div style={{fontSize:'13px'}}>{fmtDate(p.startDate)} → {fmtDate(p.endDate)}</div>
+                        <div key={p.id} style={{display:'grid',gridTemplateColumns:'1.6fr 0.6fr 0.7fr 0.9fr auto',padding:'12px 18px',alignItems:'center',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+                          <div style={{fontSize:'13px'}}>
+                            {fmtDate(p.startDate)} → {fmtDate(p.endDate)}
+                            {p.source==='csv'&&<span style={{marginLeft:'6px'}}><Badge color="blue">CSV</Badge></span>}
+                          </div>
                           <div style={{fontFamily:'var(--font-mono)',fontSize:'13px'}}>{p.discounts}</div>
-                          <div style={{fontFamily:'var(--font-mono)',fontSize:'13px'}}>{fmt$(p.ratePerDiscount)}</div>
                           <div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:'#0F6E56'}}>{fmt$(amt)}</div>
                           <div><button onClick={()=>onTogglePaid(a.id,p.id)} style={{background:'none',border:'none',cursor:'pointer',padding:0}}><Badge color={p.paid?'teal':'amber'}>{p.paid?'✓ Paid':'⏳ Pending'}</Badge></button></div>
                           <div style={{display:'flex',gap:'6px'}}>
@@ -552,7 +890,7 @@ function PayrollView({employees,deals,assignments}) {
 
 // ─── PAY STUB MODAL ───────────────────────────────────────────────
 function PayStubModal({emp,period,onClose}) {
-  const amt=period.discounts*period.ratePerDiscount;
+  const amt=periodAmt(period);
   const print=()=>{
     const w=window.open('','_blank','width=660,height=540');
     w.document.write(`<!DOCTYPE html><html><head><title>Pay Stub — ${emp?.name}</title>
@@ -568,8 +906,8 @@ function PayStubModal({emp,period,onClose}) {
     </head><body>
     <h1>Merchant Discount Pay Stub</h1><div class="sub">Generated ${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})}</div>
     <div class="g2"><div><div class="fl">Employee</div><div class="fv">${emp?.name||'—'}</div></div><div><div class="fl">Pay period</div><div class="fv">${fmtDate(period.startDate)} – ${fmtDate(period.endDate)}</div></div></div>
-    <div class="row"><span>Rate per discount</span><span>${fmt$(period.ratePerDiscount)}</span></div>
-    <div class="row"><span>Discounts obtained</span><span>${period.discounts}</span></div>
+    <div class="row"><span>Deals / discounts</span><span>${period.discounts}</span></div>
+    <div class="row"><span>Source</span><span>${period.source==='csv'?'CSV import':'Manual entry'}</span></div>
     <div class="tot"><span class="tl">Gross pay</span><span class="tv">${fmt$(amt)}</span></div>
     <div class="ft">PayoutPro — Merchant Discount Pay Stub</div></body></html>`);
     w.document.close(); w.print();
@@ -582,7 +920,7 @@ function PayStubModal({emp,period,onClose}) {
           <div><div style={{fontSize:'11px',color:'var(--color-text-secondary)',marginBottom:'3px'}}>Period</div><div style={{fontSize:'13px',fontWeight:'500'}}>{fmtDate(period.startDate)} → {fmtDate(period.endDate)}</div></div>
         </div>
         <HR/>
-        {[['Rate per discount',fmt$(period.ratePerDiscount)],['Discounts obtained',String(period.discounts)]].map(([l,v])=>(
+        {[['Deals / discounts',String(period.discounts)],['Source',period.source==='csv'?'CSV import':'Manual entry']].map(([l,v])=>(
           <div key={l} style={{display:'flex',justifyContent:'space-between',padding:'8px 0',fontSize:'13px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{color:'var(--color-text-secondary)'}}>{l}</span><span style={{fontFamily:'var(--font-mono)',fontWeight:'500'}}>{v}</span></div>
         ))}
         <div style={{background:'#E1F5EE',border:'0.5px solid #5DCAA5',borderRadius:'var(--border-radius-md)',padding:'13px 16px',display:'flex',justifyContent:'space-between',alignItems:'center',marginTop:'14px'}}>
@@ -600,7 +938,7 @@ function PayStubModal({emp,period,onClose}) {
 
 // ─── ROOT ─────────────────────────────────────────────────────────
 export default function PayoutPro() {
-useEffect(() => {
+  useEffect(() => {
     const el = document.createElement('style');
     el.textContent = `
       :root {
@@ -628,6 +966,8 @@ useEffect(() => {
     return () => document.head.removeChild(el);
   }, []);
 
+  const [session,setSession]=useState(null);
+  const [authLoading,setAuthLoading]=useState(true);
   const [tab,setTab]=useState('employees');
   const [employees,setEmployees]=useState([]);
   const [deals,setDeals]=useState([]);
@@ -636,17 +976,26 @@ useEffect(() => {
   const [loading,setLoading]=useState(true);
   const [modal,setModal]=useState(null);
 
+  // Auth
   useEffect(()=>{
+    supabase.auth.getSession().then(({data:{session}})=>{setSession(session);setAuthLoading(false);});
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_,session)=>setSession(session));
+    return ()=>subscription.unsubscribe();
+  },[]);
+
+  // Data load
+  useEffect(()=>{
+    if(!session) return;
     Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn')]).then(([e,d,a])=>{
       setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setLoading(false);
     });
-  },[]);
+  },[session]);
 
   const setE=v=>{setEmployees(v);saveS('po_emp',v);};
   const setD=v=>{setDeals(v);saveS('po_deals',v);};
   const setA=v=>{setAssignments(v);saveS('po_asgn',v);};
 
-  const addEmployee=name=>{ setE([...employees,{id:genId(),name,createdAt:new Date().toISOString()}]); setModal(null); };
+  const addEmployee=(name,email)=>{ setE([...employees,{id:genId(),name,email:email||'',createdAt:new Date().toISOString()}]); setModal(null); };
   const deleteEmployee=id=>setE(employees.filter(e=>e.id!==id));
   const addDeal=deal=>{ setD([...deals,{...deal,id:genId(),createdAt:new Date().toISOString(),monthlyActivations:Array(12).fill(0),paid:{setterUpfront:false,closerUpfront:false,setterBackend:Array(12).fill(false),closerBackend:Array(12).fill(false)}}]); setModal(null); };
   const updateActivation=(dealId,idx,val)=>{ const u=deals.map(d=>{if(d.id!==dealId) return d; const ma=[...d.monthlyActivations]; ma[idx]=Math.max(0,+val||0); return {...d,monthlyActivations:ma};}); setD(u); setSelectedDeal(u.find(d=>d.id===dealId)||null); };
@@ -655,9 +1004,27 @@ useEffect(() => {
   const togglePeriodPaid=(aId,pId)=>setA(assignments.map(a=>a.id!==aId?a:{...a,periods:a.periods.map(p=>p.id!==pId?p:{...p,paid:!p.paid})}));
   const deletePeriod=(aId,pId)=>setA(assignments.map(a=>a.id!==aId?a:{...a,periods:a.periods.filter(p=>p.id!==pId)}).filter(a=>a.periods.length>0));
 
-  const TABS=[['employees','Employees',Users],['deals','Deals',Building2],['reps','Merchant Reps',DollarSign],['payroll','Payroll',Receipt]];
+  // Mark a deal payment as paid (used by payment queue)
+  const markDealPaid=(dealId,payKey,idx)=>{
+    setD(deals.map(d=>{
+      if(d.id!==dealId) return d;
+      const paid={...d.paid};
+      if(idx!==undefined){const arr=[...paid[payKey]];arr[idx]=true;paid[payKey]=arr;}
+      else paid[payKey]=true;
+      return {...d,paid};
+    }));
+  };
 
+  const signOut=()=>supabase.auth.signOut();
+  const userEmail=session?.user?.email;
+  const isAdmin=userEmail===ADMIN_EMAIL;
+
+  if(authLoading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#64748b',fontSize:'14px'}}>Loading…</div>;
+  if(!session) return <LoginPage/>;
+  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} userEmail={userEmail} onSignOut={signOut}/>;
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'200px',color:'var(--color-text-secondary)',fontSize:'14px'}}>Loading…</div>;
+
+  const TABS=[['employees','Employees',Users],['deals','Deals',Building2],['reps','Merchant Reps',DollarSign],['payments','Payments',CheckCircle],['payroll','Payroll',Receipt]];
 
   return (
     <div style={{padding:'20px',maxWidth:'980px',margin:'0 auto',fontFamily:'var(--font-sans)'}}>
@@ -671,19 +1038,26 @@ useEffect(() => {
             </button>
           ))}
         </div>
-        <button style={BTN(true)} onClick={()=>setModal({type:tab==='employees'?'addEmp':tab==='deals'?'addDeal':tab==='reps'?'addPeriod':null})}>
-          <Plus size={14}/>{tab==='employees'?'Employee':tab==='deals'?'Deal':tab==='reps'?'Period':''}
-        </button>
+        <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+          {['employees','deals','reps'].includes(tab)&&(
+            <button style={BTN(true)} onClick={()=>setModal({type:tab==='employees'?'addEmp':tab==='deals'?'addDeal':'addPeriod'})}>
+              <Plus size={14}/>{tab==='employees'?'Employee':tab==='deals'?'Deal':'Period'}
+            </button>
+          )}
+          <button style={{...BTN(false),padding:'7px 10px'}} onClick={signOut} title="Sign out"><LogOut size={14}/></button>
+        </div>
       </div>
 
       {tab==='employees'&&<EmployeesView employees={employees} deals={deals} assignments={assignments} onAdd={()=>setModal({type:'addEmp'})} onDelete={deleteEmployee}/>}
       {tab==='deals'&&(selectedDeal?<DealDetail deal={selectedDeal} employees={employees} onBack={()=>setSelectedDeal(null)} onUpdateActivation={updateActivation} onDelete={deleteDeal}/>:<DealsView deals={deals} employees={employees} onSelect={setSelectedDeal} onAdd={()=>setModal({type:'addDeal'})}/>)}
-      {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
+      {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onImportCSV={()=>setModal({type:'importCSV'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
+      {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
       {tab==='payroll'&&<PayrollView employees={employees} deals={deals} assignments={assignments}/>}
 
       {modal?.type==='addEmp'&&<AddEmployeeModal onAdd={addEmployee} onClose={()=>setModal(null)}/>}
       {modal?.type==='addDeal'&&<AddDealModal employees={employees} onAdd={addDeal} onClose={()=>setModal(null)}/>}
       {modal?.type==='addPeriod'&&<AddPeriodModal employees={employees} onAdd={addPeriod} onClose={()=>setModal(null)}/>}
+      {modal?.type==='importCSV'&&<CSVImportModal employees={employees} assignments={assignments} onSave={updated=>{setA(updated);setModal(null);}} onClose={()=>setModal(null)}/>}
       {modal?.type==='payStub'&&<PayStubModal emp={modal.data.emp} period={modal.data.p} onClose={()=>setModal(null)}/>}
     </div>
   );
