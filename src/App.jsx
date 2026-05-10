@@ -13,7 +13,7 @@ const ADMIN_EMAIL = 'shuffman@tailgateofficial.com';
 
 // ─── Storage ──────────────────────────────────────────────────────
 const loadS = async key => { try { const { data } = await supabase.from('app_data').select('value').eq('key',key).single(); return data ? JSON.parse(data.value) : []; } catch { return []; } };
-const saveS = async (key,val) => { try { await supabase.from('app_data').upsert({key, value: JSON.stringify(val)}); } catch {} };
+const saveS = async (key,val) => { try { await supabase.from('app_data').upsert({key, value: JSON.stringify(val)}); } catch(e) {} };
 
 // ─── Utils ────────────────────────────────────────────────────────
 const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
@@ -273,7 +273,7 @@ function CSVImportModal({employees,assignments,onSave,onClose}) {
 
   const handleConfirm=()=>{
     const updated=[...assignments];
-    repSummary.forEach(({repName,emp,total,count,rows:rr})=>{
+    repSummary.forEach(({repName:_repName,emp,total,count,rows:rr})=>{
       if(!emp)return;
       const period={id:genId(),startDate,endDate,discounts:count,ratePerDiscount:0,totalAmount:total,source:'csv',paid:false,
         entries:rr.map(r=>({business:r.business,discountType:r.discountType,specifics:r.specifics,tier:tiers[r.idx],amount:TIER_AMT[tiers[r.idx]]||0,date:r.date}))
