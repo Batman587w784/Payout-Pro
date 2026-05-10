@@ -12,8 +12,20 @@ const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env
 const ADMIN_EMAIL = 'shuffman@tailgateofficial.com';
 
 // ─── Storage ──────────────────────────────────────────────────────
-const loadS = async key => { try { const { data } = await supabase.from('app_data').select('value').eq('key',key).single(); return data ? JSON.parse(data.value) : []; } catch { return []; } };
-const saveS = async (key,val) => { try { await supabase.from('app_data').upsert({key, value: JSON.stringify(val)}); } catch(e) {} };
+// Saves instantly to localStorage (so nothing is ever lost on tab switch)
+// AND syncs to Supabase in the background (for cross-device access)
+const loadS = async key => {
+  try {
+    const { data } = await supabase.from('app_data').select('value').eq('key',key).single();
+    if (data) { localStorage.setItem(key, data.value); return JSON.parse(data.value); }
+  } catch(e) {}
+  try { const local = localStorage.getItem(key); return local ? JSON.parse(local) : []; } catch(e) { return []; }
+};
+const saveS = async (key,val) => {
+  const str = JSON.stringify(val);
+  localStorage.setItem(key, str); // instant — never lost
+  try { await supabase.from('app_data').upsert({key, value: str}); } catch(e) {}
+};
 
 // ─── Utils ────────────────────────────────────────────────────────
 const genId = () => Date.now().toString(36) + Math.random().toString(36).slice(2,7);
