@@ -18,8 +18,10 @@ const initials = name => name.split(' ').map(n=>n[0]).join('').slice(0,2).toUppe
 
 // ─── Storage ──────────────────────────────────────────────────────
 // FOR VERCEL: replace these two functions with:
-//   const loadS = async key => { try { return JSON.parse(localStorage.getItem(key))||[]; } catch { return []; } };
-//   const saveS = async (key,val) => { try { localStorage.setItem(key,JSON.stringify(val)); } catch {} };
+//   import { createClient } from '@supabase/supabase-js';
+const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY);
+const loadS = async key => { try { const { data } = await supabase.from('app_data').select('value').eq('key',key).single(); return data ? JSON.parse(data.value) : []; } catch { return []; } };
+const saveS = async (key,val) => { try { await supabase.from('app_data').upsert({key, value: JSON.stringify(val)}); } catch {} };
 const loadS = async key => { try { return JSON.parse(localStorage.getItem(key))||[]; } catch { return []; } };
 const saveS = async (key,val) => { try { localStorage.setItem(key,JSON.stringify(val)); } catch {} };
 
