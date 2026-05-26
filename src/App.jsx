@@ -889,7 +889,7 @@ function downloadPaySheet(emp, allPayments, start, end) {
   </div>
   ${pmts.length===0?'<p style="text-align:center;color:#aaa;padding:32px;font-size:14px">No payments in this period</p>':`<table><thead><tr><th>Date</th><th>Type</th><th>Description</th><th style="text-align:right">Amount</th><th style="text-align:center">Status</th></tr></thead><tbody>${rows}</tbody></table>`}
   <div class="ft">Generated ${new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'})} · Tailgate Payday</div>
-  </body></html>`);
+  </body></html>`;
   const __blob = new Blob([__html], {type:'text/html'});
   const __url = URL.createObjectURL(__blob);
   const __a = document.createElement('a');
