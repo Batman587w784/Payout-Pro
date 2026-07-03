@@ -1150,14 +1150,14 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
   const submittedRec=(call.recordings||[]).find(r=>r.take===submittedTake);
   const hasVideoTake=!!submittedRec && submittedRec.mediaMode!=='audio';
 
-  // Everything we already know about this lead — shown as a summary up top
+  // Profile header bits + the rest of what we already know about this lead
+  const leadAddress=(call.addresses?.map(addrLine).filter(Boolean).join(' • '))||call.location||'';
+  const leadSchool=call.school||'';
   const leadInfo=[
     ['Contact', call.contact||call.spokeTo],
     ['Phone', call.phone],
     ['Email', call.email],
-    ['Address', (call.addresses?.map(addrLine).filter(Boolean).join(' • '))||call.location],
     ['Category', call.businessType||call.category],
-    ['School', call.school],
     ['Discount', call.discount||call.offerDetails],
     ['More', call.additionalInfo],
   ].filter(([,v])=>v);
@@ -1207,11 +1207,22 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
 
   return (
     <ModalWrap title={`Log call — ${call.business}`} onClose={onClose} wide maxWidth="1060px">
-      {/* Lead summary — who we're calling + everything we already know */}
+      {/* Lead profile — name + address on the left, school/group top-right */}
       <div style={{...CARD,background:'var(--color-background-secondary)',padding:'16px',marginBottom:'16px'}}>
-        <div style={{fontSize:'20px',fontWeight:'600',color:'#0f172a'}}>{call.business||'Unknown business'}</div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'16px'}}>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:'20px',fontWeight:'600',color:'#0f172a'}}>{call.business||'Unknown business'}</div>
+            {leadAddress&&<div style={{fontSize:'13px',color:'#64748b',marginTop:'4px'}}>📍 {leadAddress}</div>}
+          </div>
+          {leadSchool&&(
+            <div style={{textAlign:'right',flexShrink:0}}>
+              <div style={{fontSize:'10px',color:'#64748b',textTransform:'uppercase',letterSpacing:'0.6px',fontWeight:'600'}}>School / Group</div>
+              <div style={{fontSize:'14px',fontWeight:'500',color:'#0f172a',marginTop:'2px'}}>{leadSchool}</div>
+            </div>
+          )}
+        </div>
         {leadInfo.length>0&&(
-          <div style={{display:'flex',flexWrap:'wrap',gap:'5px 20px',marginTop:'8px',fontSize:'13px',color:'#0f172a',lineHeight:1.5}}>
+          <div style={{display:'flex',flexWrap:'wrap',gap:'5px 20px',marginTop:'12px',fontSize:'13px',color:'#0f172a',lineHeight:1.5,borderTop:'0.5px solid var(--color-border-tertiary)',paddingTop:'12px'}}>
             {leadInfo.map(([label,val])=><span key={label}><span style={{color:'#64748b'}}>{label}: </span>{val}</span>)}
           </div>
         )}
