@@ -40,6 +40,8 @@ const today = () => new Date().toISOString().split('T')[0];
 const currYM = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; };
 const addDays = (date,n) => { const d=new Date(date); d.setDate(d.getDate()+n); return d.toISOString().split('T')[0]; };
 const fmtDate = s => { if(!s) return ''; const [y,m,d]=s.split('-'); return `${SM[+m-1]} ${+d}, ${y}`; };
+const fmtTime = t => { if(!t) return ''; const [h,m]=t.split(':').map(Number); const ap=h<12?'AM':'PM'; return `${h%12||12}:${String(m).padStart(2,'0')} ${ap}`; };
+const fmtDateTime = (d,t) => d ? `${fmtDate(d)}${t?` at ${fmtTime(t)}`:''}` : '';
 const initials = name => name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase();
 
 // Parse "08-May-2026 14:32:02" → "2026-05-08"
@@ -940,12 +942,14 @@ function PayStubModal({emp,period,onClose}) {
 const CALL_BUCKET = 'call-recordings';
 const CALL_STATUS = {
   to_call:        {label:'To call',        color:'gray'},
-  interested:     {label:'Interested',     color:'teal'},
-  send_info:      {label:'Send info',      color:'blue'},
+  completed:      {label:'Completed',      color:'teal'},
+  needs_info:     {label:'Needs info',     color:'amber'},
   callback:       {label:'Callback',       color:'blue'},
-  no_answer:      {label:'No answer',      color:'amber'},
+  no_answer:      {label:'No answer',      color:'gray'},
   not_interested: {label:'Not interested', color:'red'},
-  recorded:       {label:'Recorded',       color:'teal'}, // legacy records
+  interested:     {label:'Interested',     color:'teal'}, // legacy
+  send_info:      {label:'Send info',      color:'blue'}, // legacy
+  recorded:       {label:'Recorded',       color:'teal'}, // legacy
 };
 const VERIFY = {
   pending:  {label:'Awaiting review', color:'amber'},
@@ -1091,9 +1095,10 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake 
 
 // ── Log Call cockpit — one focused view per lead: record anytime, read the script, pick an outcome ──
 const OUTCOMES = [
-  ['interested',    'Interested',     'teal',  'Grab their details + record'],
-  ['callback',      'Call back',      'blue',  'Schedule a time'],
-  ['no_answer',     'No answer',      'amber', 'Stays in rotation'],
+  ['completed',     'Completed',      'teal',  'Agreed — video required'],
+  ['needs_info',    'Needs more info','amber', 'Warm — follow up'],
+  ['callback',      'Call back',      'blue',  'Schedule date & time'],
+  ['no_answer',     'No answer',      'gray',  'Stays in rotation'],
   ['not_interested','Not interested', 'red',   'Keep their info'],
 ];
 // Small field helpers for the Log Call form (module-level so inputs keep focus across renders)
@@ -1127,6 +1132,7 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
   const [addresses,setAddresses]=useState(call.addresses?.length?call.addresses:[{street:call.location||'',city:'',state:''}]);
   const [offerDetails,setOfferDetails]=useState(call.offerDetails||call.discount||'');
   const [cbDate,setCbDate]=useState(call.callbackDate||addDays(today(),2));
+  const [cbTime,setCbTime]=useState(call.callbackTime||'');
   const [note,setNote]=useState('');
 
   const setDmF=(k,v)=>setDm(d=>({...d,[k]:v}));
@@ -1140,77 +1146,117 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
   const addrText=addresses.map(addrLine).filter(Boolean).join(' • ')||'[address, city, state]';
   const offerText=offerDetails||'[offer details]';
 
+  // "Completed" requires an actual video recording of the confirmation
+  const submittedRec=(call.recordings||[]).find(r=>r.take===submittedTake);
+  const hasVideoTake=!!submittedRec && submittedRec.mediaMode!=='audio';
+
+  // Everything we already know about this lead — shown as a summary up top
+  const leadInfo=[
+    ['Contact', call.contact||call.spokeTo],
+    ['Phone', call.phone],
+    ['Email', call.email],
+    ['Address', (call.addresses?.map(addrLine).filter(Boolean).join(' • '))||call.location],
+    ['Category', call.businessType||call.category],
+    ['School', call.school],
+    ['Discount', call.discount||call.offerDetails],
+    ['More', call.additionalInfo],
+  ].filter(([,v])=>v);
+
   const withNote=base=>note.trim()?((base?base+'\n\n':'')+`${today()}: ${note.trim()}`):base;
   const commit=patch=>{ onUpdateCall(call.id,{...patch, notes:withNote(call.notes||'')}); onClose(); };
 
   const save=()=>{
-    if(outcome==='interested'){
-      const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
-      commit({ status:'interested',
-        ...(submittedTake!=null ? {verifyStatus:'pending', submittedTake, recordedAt:new Date().toISOString()} : {}),
-        decisionMaker:dm, spokeTo, email, phone, business:businessName||call.business,
-        businessType, category:businessType, addresses, location:loc||call.location||'', offerDetails });
+    const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
+    const details={ decisionMaker:dm, spokeTo, email, phone, business:businessName||call.business,
+      businessType, category:businessType, addresses, location:loc||call.location||'', offerDetails };
+    if(outcome==='completed'){
+      if(!hasVideoTake) return; // guarded by the disabled button too
+      commit({ status:'completed', verifyStatus:'pending', submittedTake, recordedAt:new Date().toISOString(), ...details });
+    } else if(outcome==='needs_info'){
+      commit({ status:'needs_info', ...(submittedTake!=null?{submittedTake}:{}), ...details });
     } else if(outcome==='callback'){
-      commit({ status:'callback', callbackDate:cbDate, spokeTo, email, phone, decisionMaker:dm });
+      commit({ status:'callback', callbackDate:cbDate, callbackTime:cbTime, spokeTo, email, phone, decisionMaker:dm });
     } else if(outcome==='no_answer'){
       commit({ status:'no_answer', ...(spokeTo?{spokeTo}:{}) });
     } else if(outcome==='not_interested'){
       commit({ status:'not_interested', spokeTo, email, phone, decisionMaker:dm });
     }
   };
+  const detailsForm=(
+    <>
+      <DMFields dm={dm} set={setDmF}/>
+      <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
+        <Field label="Business name"><input style={INP} value={businessName} onChange={e=>setBusinessName(e.target.value)}/></Field>
+        <Field label="Business type / category"><input style={INP} value={businessType} onChange={e=>setBusinessType(e.target.value)}/></Field>
+      </div>
+      <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>Address(es) — confirm every location</label>
+      {addresses.map((a,i)=>(
+        <div key={i} style={{display:'grid',gridTemplateColumns:'1.6fr 1fr 0.8fr auto',gap:'6px',marginBottom:'6px'}}>
+          <input style={INP} placeholder="Street" value={a.street} onChange={e=>setAddr(i,'street',e.target.value)}/>
+          <input style={INP} placeholder="City" value={a.city} onChange={e=>setAddr(i,'city',e.target.value)}/>
+          <input style={INP} placeholder="State" value={a.state} onChange={e=>setAddr(i,'state',e.target.value)}/>
+          <button style={{...BTN(false),padding:'5px 8px'}} onClick={()=>addresses.length>1?rmAddr(i):setAddr(i,'street','')} title="Remove"><Trash2 size={12}/></button>
+        </div>
+      ))}
+      <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px',marginBottom:'12px'}} onClick={addAddr}><Plus size={12}/>Add location</button>
+      <Field label="Offer / discount details (enter what they agreed to)"><textarea style={{...INP,minHeight:'52px',resize:'vertical'}} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)}/></Field>
+      <NoteField note={note} setNote={setNote}/>
+    </>
+  );
 
   return (
     <ModalWrap title={`Log call — ${call.business}`} onClose={onClose} wide maxWidth="1060px">
-      <div style={{fontSize:'12px',color:'#64748b',marginBottom:'4px'}}>{[call.contact,call.phone,call.location].filter(Boolean).join(' · ')||'No contact details yet'}</div>
-      {call.notes&&<div style={{background:'var(--color-background-secondary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px',fontSize:'12px',color:'#0f172a',whiteSpace:'pre-wrap',margin:'8px 0 0',lineHeight:1.5}}><b style={{color:'#64748b'}}>Previous notes</b><br/>{call.notes}</div>}
+      {/* Lead summary — who we're calling + everything we already know */}
+      <div style={{...CARD,background:'var(--color-background-secondary)',padding:'16px',marginBottom:'16px'}}>
+        <div style={{fontSize:'20px',fontWeight:'600',color:'#0f172a'}}>{call.business||'Unknown business'}</div>
+        {leadInfo.length>0&&(
+          <div style={{display:'flex',flexWrap:'wrap',gap:'5px 20px',marginTop:'8px',fontSize:'13px',color:'#0f172a',lineHeight:1.5}}>
+            {leadInfo.map(([label,val])=><span key={label}><span style={{color:'#64748b'}}>{label}: </span>{val}</span>)}
+          </div>
+        )}
+        {call.notes&&<div style={{background:'var(--color-background-primary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px',fontSize:'12px',color:'#0f172a',whiteSpace:'pre-wrap',margin:'12px 0 0',lineHeight:1.5}}><b style={{color:'#64748b'}}>Notes</b><br/>{call.notes}</div>}
+      </div>
 
-      {/* Outcome buttons first — the very first thing you see */}
-      <div style={{fontWeight:'600',fontSize:'16px',margin:'16px 0 12px'}}>How did the call go?</div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:'12px',marginBottom:'16px'}}>
+      {/* Outcome buttons — the very first action */}
+      <div style={{fontWeight:'600',fontSize:'16px',margin:'0 0 12px'}}>How did the call go?</div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:'10px',marginBottom:'16px'}}>
         {OUTCOMES.map(([key,label,color,sub])=>{
           const on=outcome===key; const c=CC[color];
           return (
             <button key={key} onClick={()=>setOutcome(key)}
-              style={{textAlign:'left',padding:'18px 20px',cursor:'pointer',borderRadius:'var(--border-radius-lg)',
+              style={{textAlign:'left',padding:'16px',minHeight:'92px',display:'flex',flexDirection:'column',justifyContent:'space-between',cursor:'pointer',borderRadius:'var(--border-radius-lg)',
                 border:`1px solid ${on?c.br:'var(--color-border-tertiary)'}`,background:on?c.bg:'var(--color-background-primary)',
                 boxShadow:on?`0 0 0 2px ${c.br}`:'none',fontFamily:'var(--font-sans)',transition:'all 0.12s'}}>
-              <div style={{fontSize:'16px',fontWeight:'600',color:on?c.tx:'#0f172a'}}>{label}</div>
-              <div style={{fontSize:'12px',color:'#64748b',marginTop:'3px'}}>{sub}</div>
+              <div style={{fontSize:'15px',fontWeight:'600',color:on?c.tx:'#0f172a'}}>{label}</div>
+              <div style={{fontSize:'11px',color:'#64748b',marginTop:'8px'}}>{sub}</div>
             </button>
           );
         })}
       </div>
 
-      {outcome==='interested'&&(
+      {outcome==='completed'&&(
         <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
-          <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'4px'}}>Their details</div>
-          <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>Grab everything you can — even if they still have to think it over or check with someone, save what you got and follow up.</div>
-          <DMFields dm={dm} set={setDmF}/>
-          <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
-            <Field label="Business name"><input style={INP} value={businessName} onChange={e=>setBusinessName(e.target.value)}/></Field>
-            <Field label="Business type / category"><input style={INP} value={businessType} onChange={e=>setBusinessType(e.target.value)}/></Field>
-          </div>
-          <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>Address(es) — confirm every location</label>
-          {addresses.map((a,i)=>(
-            <div key={i} style={{display:'grid',gridTemplateColumns:'1.6fr 1fr 0.8fr auto',gap:'6px',marginBottom:'6px'}}>
-              <input style={INP} placeholder="Street" value={a.street} onChange={e=>setAddr(i,'street',e.target.value)}/>
-              <input style={INP} placeholder="City" value={a.city} onChange={e=>setAddr(i,'city',e.target.value)}/>
-              <input style={INP} placeholder="State" value={a.state} onChange={e=>setAddr(i,'state',e.target.value)}/>
-              <button style={{...BTN(false),padding:'5px 8px'}} onClick={()=>addresses.length>1?rmAddr(i):setAddr(i,'street','')} title="Remove"><Trash2 size={12}/></button>
-            </div>
-          ))}
-          <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px',marginBottom:'12px'}} onClick={addAddr}><Plus size={12}/>Add location</button>
-          <Field label="Offer / discount details (enter what they agreed to)"><textarea style={{...INP,minHeight:'52px',resize:'vertical'}} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)}/></Field>
-          <NoteField note={note} setNote={setNote}/>
-          <div style={{fontSize:'12px',color:submittedTake!=null?'#0F6E56':'#64748b',marginBottom:'10px'}}>{submittedTake!=null?'✓ Recording attached — this goes to your admin to verify and pay.':'No recording yet — scroll down to record the confirmation, or just save their details and come back.'}</div>
-          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}><CheckCircle size={14}/>Save interested</button>
+          <div style={{background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}>🎥 Be sure to record a video of you confirming the discount with them — a video is <b>required</b> to mark this Completed. Scroll down, record, and tap “Use this recording.”</div>
+          <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'12px'}}>Confirm their details</div>
+          {detailsForm}
+          <div style={{fontSize:'12px',color:hasVideoTake?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasVideoTake?'✓ Video attached — this goes to your admin to verify and pay.':'⚠ No video attached yet — record one below to enable saving.'}</div>
+          <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasVideoTake?1:0.5}} disabled={!hasVideoTake} onClick={save}><CheckCircle size={14}/>Save completed</button>
+        </div>
+      )}
+      {outcome==='needs_info'&&(
+        <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
+          <div style={{fontSize:'12px',fontWeight:'600',color:'#854F0B',marginBottom:'4px'}}>Their details</div>
+          <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>They’re interested but need more info or time to decide. Grab everything you can and follow up.</div>
+          {detailsForm}
+          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save — needs more info</button>
         </div>
       )}
       {outcome==='callback'&&(
         <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'8px'}}>
             <Field label="Call back on"><input style={INP} type="date" value={cbDate} onChange={e=>setCbDate(e.target.value)}/></Field>
+            <Field label="At (time)"><input style={INP} type="time" value={cbTime} onChange={e=>setCbTime(e.target.value)}/></Field>
             <Field label="Who did you speak to?"><input style={INP} value={spokeTo} onChange={e=>setSpokeTo(e.target.value)}/></Field>
           </div>
           <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
@@ -1277,8 +1323,8 @@ function LeadRow({ c, onOpenLog }) {
         <div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>{[c.contact,c.phone,c.location].filter(Boolean).join(' · ')||'No contact details'}</div>
       </div>
       <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
-        {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:overdue?'#A32D2D':'#185FA5',fontWeight:'500'}}>{overdue?'Due ':''}{fmtDate(c.callbackDate)}</span>}
-        {(c.status==='interested'||c.status==='recorded')&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
+        {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:overdue?'#A32D2D':'#185FA5',fontWeight:'500'}}>{overdue?'Due ':''}{fmtDateTime(c.callbackDate,c.callbackTime)}</span>}
+        {(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
         <Badge color={st.color}>{st.label}</Badge>
       </div>
       <button style={{...BTN(true),padding:'6px 12px',fontSize:'12px',whiteSpace:'nowrap'}} onClick={()=>onOpenLog(c)}><Phone size={12}/>Log Call</button>
@@ -1294,13 +1340,13 @@ function CallerHome({ myCalls, onOpenLog }) {
     const ac=a.status==='callback'?0:1, bc=b.status==='callback'?0:1;
     return (ac-bc)||((a.callbackDate||'').localeCompare(b.callbackDate||''));
   });
-  const order={callback:0,interested:1,recorded:1,no_answer:2,not_interested:3};
+  const order={callback:0,completed:1,interested:1,recorded:1,needs_info:2,no_answer:3,not_interested:4};
   const rest=myCalls.filter(c=>!isUrgent(c)).sort((a,b)=>((order[a.status]??9)-(order[b.status]??9))||((a.callbackDate||'').localeCompare(b.callbackDate||'')));
   const counts={
     to_call: myCalls.filter(c=>c.status==='to_call').length,
     callback: myCalls.filter(c=>c.status==='callback').length,
-    no_answer: myCalls.filter(c=>c.status==='no_answer').length,
-    interested: myCalls.filter(c=>c.status==='interested'||c.status==='recorded').length,
+    needs_info: myCalls.filter(c=>c.status==='needs_info').length,
+    completed: myCalls.filter(c=>c.status==='completed'||c.status==='interested'||c.status==='recorded').length,
   };
   const [shownU,setShownU]=useState(LEAD_BATCH);
   const [shownR,setShownR]=useState(LEAD_BATCH);
@@ -1311,8 +1357,8 @@ function CallerHome({ myCalls, onOpenLog }) {
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',marginBottom:'16px'}}>
         <Metric label="To call" value={counts.to_call}/>
         <Metric label="Callbacks" value={counts.callback} color="#185FA5"/>
-        <Metric label="No answer" value={counts.no_answer} color="#854F0B"/>
-        <Metric label="Interested" value={counts.interested} color="#0F6E56"/>
+        <Metric label="Needs info" value={counts.needs_info} color="#854F0B"/>
+        <Metric label="Completed" value={counts.completed} color="#0F6E56"/>
       </div>
 
       <div style={{...CARD,marginBottom:'14px'}}>
@@ -1352,17 +1398,18 @@ function CallerHome({ myCalls, onOpenLog }) {
 
 // ── CRM board — logged leads grouped into columns (ClickUp-style) ──
 const CRM_COLS = [
+  ['needs_info',    'Needs info',     'amber'],
+  ['completed',     'Completed',      'teal'],
   ['callback',      'Call back',      'blue'],
-  ['interested',    'Interested',     'teal'],
-  ['no_answer',     'No answer',      'amber'],
+  ['no_answer',     'No answer',      'gray'],
   ['not_interested','Not interested', 'red'],
 ];
 function CallerCRM({ myCalls, onOpenLog }) {
-  const inCol=(c,key)=>key==='interested'?(c.status==='interested'||c.status==='recorded'):c.status===key;
+  const inCol=(c,key)=>key==='completed'?(c.status==='completed'||c.status==='interested'||c.status==='recorded'):c.status===key;
   return (
     <div>
       <div style={{fontSize:'13px',color:'#64748b',marginBottom:'14px'}}>Everyone you’ve logged, grouped by where they stand. Click a card to update it.</div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(220px,1fr))',gap:'12px',overflowX:'auto',paddingBottom:'6px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(5,minmax(200px,1fr))',gap:'12px',overflowX:'auto',paddingBottom:'6px'}}>
         {CRM_COLS.map(([key,label,color])=>{
           const c=CC[color]; const items=myCalls.filter(x=>inCol(x,key));
           return (
@@ -1378,8 +1425,8 @@ function CallerCRM({ myCalls, onOpenLog }) {
                   <button key={x.id} onClick={()=>onOpenLog(x)} style={{textAlign:'left',background:'var(--color-background-primary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 11px',cursor:'pointer',fontFamily:'var(--font-sans)'}}>
                     <div style={{fontWeight:'500',fontSize:'13px',color:'#0f172a'}}>{x.business}</div>
                     <div style={{fontSize:'11px',color:'#64748b',marginTop:'2px'}}>{[x.contact,x.phone].filter(Boolean).join(' · ')||'—'}</div>
-                    {x.status==='callback'&&x.callbackDate&&<div style={{fontSize:'11px',color:x.callbackDate<today()?'#A32D2D':'#185FA5',fontWeight:'500',marginTop:'3px'}}>Call back {fmtDate(x.callbackDate)}</div>}
-                    {(x.status==='interested'||x.status==='recorded')&&x.verifyStatus&&<div style={{marginTop:'4px'}}><Badge color={VERIFY[x.verifyStatus].color}>{VERIFY[x.verifyStatus].label}</Badge></div>}
+                    {x.status==='callback'&&x.callbackDate&&<div style={{fontSize:'11px',color:x.callbackDate<today()?'#A32D2D':'#185FA5',fontWeight:'500',marginTop:'3px'}}>Call back {fmtDateTime(x.callbackDate,x.callbackTime)}</div>}
+                    {(x.status==='completed'||x.status==='interested'||x.status==='recorded')&&x.verifyStatus&&<div style={{marginTop:'4px'}}><Badge color={VERIFY[x.verifyStatus].color}>{VERIFY[x.verifyStatus].label}</Badge></div>}
                   </button>
                 ))}
               </div>
@@ -1529,7 +1576,7 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
 }
 
 function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImport, onMarkTouch }) {
-  const pending=calls.filter(c=>(c.status==='interested'||c.status==='recorded')&&(!c.verifyStatus||c.verifyStatus==='pending'));
+  const pending=calls.filter(c=>(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&(c.submittedTake!=null||c.recordingPath)&&(!c.verifyStatus||c.verifyStatus==='pending'));
   const followUps=calls.filter(c=>c.status==='send_info');
   const nameOf=id=>employees.find(e=>e.id===id)?.name||'Unassigned';
   const byCaller={};
@@ -1579,8 +1626,8 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
                 <div><div style={{fontSize:'13px',fontWeight:'500'}}>{c.business}</div><div style={{fontSize:'11px',color:'#64748b'}}>{[c.offerDetails||c.discount,c.location].filter(Boolean).join(' · ')||'—'}</div></div>
                 <div style={{display:'flex',gap:'6px',alignItems:'center'}}>
                   {c.payout?.amount!=null&&<Badge color="teal">{fmt$(c.payout.amount)} paid out</Badge>}
-                  {(c.status==='interested'||c.status==='recorded')&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
-                  {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:'#185FA5'}}>{fmtDate(c.callbackDate)}</span>}
+                  {(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
+                  {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:'#185FA5'}}>{fmtDateTime(c.callbackDate,c.callbackTime)}</span>}
                   <Badge color={st.color}>{st.label}</Badge>
                 </div>
                 <button onClick={()=>onDelete(c.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
