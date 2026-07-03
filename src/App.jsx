@@ -5,7 +5,8 @@ import {
   Plus, ArrowLeft, Trash2, ChevronRight, ChevronUp, ChevronDown,
   FileText, Users, Building2, DollarSign, Calendar,
   Upload, LogOut, CheckCircle, Shield, Download,
-  Phone, Video, Circle, Square, Play
+  Phone, Video, Circle, Square, Play,
+  Info, Clock, PhoneOff, XCircle, MapPin, AlertTriangle, Pause
 } from "lucide-react";
 
 // ─── Supabase ─────────────────────────────────────────────────────
@@ -327,7 +328,7 @@ function CSVImportModal({employees,assignments,onSave,onClose}) {
           <div key={repName} style={{display:'inline-flex',alignItems:'center',gap:'6px',padding:'4px 10px',background:'var(--color-background-primary)',border:`0.5px solid ${emp?'#5DCAA5':'#EF9F27'}`,borderRadius:'var(--border-radius-md)',fontSize:'12px'}}>
             <span style={{fontWeight:'500'}}>{repName}</span>
             <span style={{color:'var(--color-text-secondary)'}}>{count} deals · {fmt$(total)}</span>
-            {!emp&&<span style={{color:'#854F0B',fontSize:'11px'}}>⚠ not in roster</span>}
+            {!emp&&<span style={{color:'#854F0B',fontSize:'11px'}}>not in roster</span>}
           </div>
         ))}
       </div>
@@ -371,7 +372,7 @@ function CSVImportModal({employees,assignments,onSave,onClose}) {
 
       {repSummary.some(r=>!r.emp)&&(
         <div style={{background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#854F0B',marginBottom:'14px'}}>
-          ⚠ Reps marked "not in roster" will be skipped. Add them in the Employees tab first, then re-import.
+          Reps marked "not in roster" will be skipped. Add them in the Employees tab first, then re-import.
         </div>
       )}
       <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
@@ -747,7 +748,7 @@ function MerchantRepsView({employees,assignments,onAddPeriod,onImportCSV,onToggl
                           </div>
                           <div style={{fontFamily:'var(--font-mono)',fontSize:'13px'}}>{p.discounts}</div>
                           <div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:'#0F6E56'}}>{fmt$(amt)}</div>
-                          <div><button onClick={()=>onTogglePaid(a.id,p.id)} style={{background:'none',border:'none',cursor:'pointer',padding:0}}><Badge color={p.paid?'teal':'amber'}>{p.paid?'✓ Paid':'⏳ Pending'}</Badge></button></div>
+                          <div><button onClick={()=>onTogglePaid(a.id,p.id)} style={{background:'none',border:'none',cursor:'pointer',padding:0}}><Badge color={p.paid?'teal':'amber'}>{p.paid?'Paid':'Pending'}</Badge></button></div>
                           <div style={{display:'flex',gap:'6px'}}>
                             <button onClick={()=>onPayStub(emp,p)} style={{...BTN(false),fontSize:'12px',padding:'5px 10px',color:'var(--color-text-info)',borderColor:'var(--color-border-info)'}}><FileText size={12}/>Stub</button>
                             <button onClick={()=>onDeletePeriod(a.id,p.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
@@ -840,7 +841,7 @@ function PayrollView({employees,deals,assignments}) {
                 <div style={{fontSize:'12px',color:'var(--color-text-secondary)',whiteSpace:'nowrap'}}>{fmtDate(p.date)}</div>
                 <div><div style={{fontSize:'13px',marginBottom:'3px'}}>{p.desc}</div><Badge color={p.type==='upfront'?'amber':p.type==='backend'?'teal':'blue'}>{p.type==='upfront'?'Deal upfront':p.type==='backend'?'Deal backend':'Merchant'}</Badge></div>
                 <div style={{fontFamily:'var(--font-mono)',fontSize:'15px',fontWeight:'500',color:'#0F6E56',whiteSpace:'nowrap'}}>{fmt$(p.amount)}</div>
-                <Badge color={p.paid?'teal':'amber'}>{p.paid?'✓ Paid':'⏳ Pending'}</Badge>
+                <Badge color={p.paid?'teal':'amber'}>{p.paid?'Paid':'Pending'}</Badge>
               </div>
             ))}
           </div>
@@ -852,7 +853,7 @@ function PayrollView({employees,deals,assignments}) {
               <div style={{fontSize:'12px',color:'var(--color-text-secondary)',whiteSpace:'nowrap'}}>{fmtDate(p.date)}</div>
               <div style={{fontSize:'13px'}}>{p.desc}</div>
               <div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:'#0F6E56',whiteSpace:'nowrap'}}>{fmt$(p.amount)}</div>
-              <Badge color={p.paid?'teal':'amber'}>{p.paid?'✓ Paid':'⏳ Pending'}</Badge>
+              <Badge color={p.paid?'teal':'amber'}>{p.paid?'Paid':'Pending'}</Badge>
             </div>
           ))}
         </div>
@@ -1086,7 +1087,7 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake 
             {saving&&<div style={{fontSize:'13px',color:'#64748b'}}>Uploading…</div>}
           </>
         )}
-        {submittedTake!=null&&<span style={{marginLeft:'auto'}}><Badge color="teal">✓ Using take {submittedTake}</Badge></span>}
+        {submittedTake!=null&&<span style={{marginLeft:'auto'}}><Badge color="teal">Using take {submittedTake}</Badge></span>}
       </div>
       {recording&&<div style={{fontSize:'11px',color:'#94a3b8',marginTop:'8px'}}>Auto-stops at 15:00.</div>}
     </div>
@@ -1095,14 +1096,16 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake 
 
 // ── Log Call cockpit — one focused view per lead: record anytime, read the script, pick an outcome ──
 const OUTCOMES = [
-  ['completed',     'Completed',      'teal',  'Agreed — video required'],
-  ['needs_info',    'Needs more info','amber', 'Warm — follow up'],
-  ['callback',      'Call back',      'blue',  'Schedule date & time'],
-  ['no_answer',     'No answer',      'gray',  'Stays in rotation'],
-  ['not_interested','Not interested', 'red',   'Keep their info'],
+  ['completed',     'Completed',      'teal',  'Agreed — video required', CheckCircle],
+  ['needs_info',    'Needs more info','amber', 'Warm — follow up',        Info],
+  ['callback',      'Call back',      'blue',  'Schedule date & time',    Clock],
+  ['no_answer',     'No answer',      'gray',  'Stays in rotation',       PhoneOff],
+  ['not_interested','Not interested', 'red',   'Keep their info',         XCircle],
 ];
+// Standardized business-type / category options
+const BUSINESS_TYPES = ['Fast food','Pizza','Casual dining','Bakery/coffee shop','Healthy','Ethnic','International','Food truck','High-end','Nightlife','Other'];
 // Small field helpers for the Log Call form (module-level so inputs keep focus across renders)
-const Wait = ({children}) => <div style={{background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'7px 11px',fontSize:'12px',color:'#854F0B',margin:'0 0 12px',fontWeight:'500'}}>⏸ {children||'Wait for them to say “yes.”'}</div>;
+const Wait = ({children}) => <div style={{display:'flex',alignItems:'center',gap:'7px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'7px 11px',fontSize:'12px',color:'#854F0B',margin:'0 0 12px',fontWeight:'500'}}><Pause size={13} style={{flexShrink:0}}/><span>{children||'Wait for them to say “yes.”'}</span></div>;
 const DMFields = ({dm,set}) => (
   <div style={{display:'grid',gridTemplateColumns:'90px 1fr 1fr',gap:'8px'}}>
     <Field label="Title"><input style={INP} placeholder="Owner" value={dm.title} onChange={e=>set('title',e.target.value)}/></Field>
@@ -1183,26 +1186,36 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
     }
   };
   const detailsForm=(
-    <>
-      <DMFields dm={dm} set={setDmF}/>
-      <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
-        <Field label="Business name"><input style={INP} value={businessName} onChange={e=>setBusinessName(e.target.value)}/></Field>
-        <Field label="Business type / category"><input style={INP} value={businessType} onChange={e=>setBusinessType(e.target.value)}/></Field>
-      </div>
-      <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>Address(es) — confirm every location</label>
-      {addresses.map((a,i)=>(
-        <div key={i} style={{display:'grid',gridTemplateColumns:'1.6fr 1fr 0.8fr auto',gap:'6px',marginBottom:'6px'}}>
-          <input style={INP} placeholder="Street" value={a.street} onChange={e=>setAddr(i,'street',e.target.value)}/>
-          <input style={INP} placeholder="City" value={a.city} onChange={e=>setAddr(i,'city',e.target.value)}/>
-          <input style={INP} placeholder="State" value={a.state} onChange={e=>setAddr(i,'state',e.target.value)}/>
-          <button style={{...BTN(false),padding:'5px 8px'}} onClick={()=>addresses.length>1?rmAddr(i):setAddr(i,'street','')} title="Remove"><Trash2 size={12}/></button>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(290px,1fr))',gap:'0 18px'}}>
+      <div>
+        <DMFields dm={dm} set={setDmF}/>
+        <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
+          <Field label="Business name"><input style={INP} value={businessName} onChange={e=>setBusinessName(e.target.value)}/></Field>
+          <Field label="Business type">
+            <select style={INP} value={businessType} onChange={e=>setBusinessType(e.target.value)}>
+              <option value="">Select…</option>
+              {businessType&&!BUSINESS_TYPES.includes(businessType)&&<option value={businessType}>{businessType}</option>}
+              {BUSINESS_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+            </select>
+          </Field>
         </div>
-      ))}
-      <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px',marginBottom:'12px'}} onClick={addAddr}><Plus size={12}/>Add location</button>
-      <Field label="Offer / discount details (enter what they agreed to)"><textarea style={{...INP,minHeight:'52px',resize:'vertical'}} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)}/></Field>
-      <NoteField note={note} setNote={setNote}/>
-    </>
+      </div>
+      <div>
+        <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>Address(es) — confirm every location</label>
+        {addresses.map((a,i)=>(
+          <div key={i} style={{display:'grid',gridTemplateColumns:'1.6fr 1fr 0.8fr auto',gap:'6px',marginBottom:'6px'}}>
+            <input style={INP} placeholder="Street" value={a.street} onChange={e=>setAddr(i,'street',e.target.value)}/>
+            <input style={INP} placeholder="City" value={a.city} onChange={e=>setAddr(i,'city',e.target.value)}/>
+            <input style={INP} placeholder="State" value={a.state} onChange={e=>setAddr(i,'state',e.target.value)}/>
+            <button style={{...BTN(false),padding:'5px 8px'}} onClick={()=>addresses.length>1?rmAddr(i):setAddr(i,'street','')} title="Remove"><Trash2 size={12}/></button>
+          </div>
+        ))}
+        <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px',marginBottom:'12px'}} onClick={addAddr}><Plus size={12}/>Add location</button>
+        <Field label="Offer / discount details (enter what they agreed to)"><textarea style={{...INP,minHeight:'70px',resize:'vertical'}} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)}/></Field>
+        <NoteField note={note} setNote={setNote}/>
+      </div>
+    </div>
   );
 
   return (
@@ -1212,7 +1225,7 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'16px'}}>
           <div style={{minWidth:0}}>
             <div style={{fontSize:'20px',fontWeight:'600',color:'#0f172a'}}>{call.business||'Unknown business'}</div>
-            {leadAddress&&<div style={{fontSize:'13px',color:'#64748b',marginTop:'4px'}}>📍 {leadAddress}</div>}
+            {leadAddress&&<div style={{display:'flex',alignItems:'center',gap:'5px',fontSize:'13px',color:'#64748b',marginTop:'4px'}}><MapPin size={13} style={{flexShrink:0}}/><span>{leadAddress}</span></div>}
           </div>
           {leadSchool&&(
             <div style={{textAlign:'right',flexShrink:0}}>
@@ -1231,16 +1244,17 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
 
       {/* Outcome buttons — the very first action */}
       <div style={{fontWeight:'600',fontSize:'16px',margin:'0 0 12px'}}>How did the call go?</div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:'10px',marginBottom:'16px'}}>
-        {OUTCOMES.map(([key,label,color,sub])=>{
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:'12px',marginBottom:'16px'}}>
+        {OUTCOMES.map(([key,label,color,sub,Icon])=>{
           const on=outcome===key; const c=CC[color];
           return (
             <button key={key} onClick={()=>setOutcome(key)}
-              style={{textAlign:'left',padding:'16px',minHeight:'92px',display:'flex',flexDirection:'column',justifyContent:'space-between',cursor:'pointer',borderRadius:'var(--border-radius-lg)',
+              style={{aspectRatio:'1 / 1',minHeight:'138px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:'10px',textAlign:'center',padding:'14px',cursor:'pointer',borderRadius:'var(--border-radius-lg)',
                 border:`1px solid ${on?c.br:'var(--color-border-tertiary)'}`,background:on?c.bg:'var(--color-background-primary)',
                 boxShadow:on?`0 0 0 2px ${c.br}`:'none',fontFamily:'var(--font-sans)',transition:'all 0.12s'}}>
-              <div style={{fontSize:'15px',fontWeight:'600',color:on?c.tx:'#0f172a'}}>{label}</div>
-              <div style={{fontSize:'11px',color:'#64748b',marginTop:'8px'}}>{sub}</div>
+              <Icon size={28} color={on?c.tx:'#64748b'} strokeWidth={1.75}/>
+              <div style={{fontSize:'14px',fontWeight:'600',color:on?c.tx:'#0f172a'}}>{label}</div>
+              <div style={{fontSize:'11px',color:'#64748b',lineHeight:1.3}}>{sub}</div>
             </button>
           );
         })}
@@ -1248,10 +1262,10 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
 
       {outcome==='completed'&&(
         <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
-          <div style={{background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}>🎥 Be sure to record a video of you confirming the discount with them — a video is <b>required</b> to mark this Completed. Scroll down, record, and tap “Use this recording.”</div>
+          <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}><Video size={16} style={{flexShrink:0,marginTop:'1px'}}/><span>Be sure to record a video of you confirming the discount with them — a video is <b>required</b> to mark this Completed. Scroll down, record, and tap “Use this recording.”</span></div>
           <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'12px'}}>Confirm their details</div>
           {detailsForm}
-          <div style={{fontSize:'12px',color:hasVideoTake?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasVideoTake?'✓ Video attached — this goes to your admin to verify and pay.':'⚠ No video attached yet — record one below to enable saving.'}</div>
+          <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasVideoTake?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasVideoTake?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasVideoTake?'Video attached — this goes to your admin to verify and pay.':'No video attached yet — record one below to enable saving.'}</span></div>
           <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasVideoTake?1:0.5}} disabled={!hasVideoTake} onClick={save}><CheckCircle size={14}/>Save completed</button>
         </div>
       )}
@@ -1378,7 +1392,7 @@ function CallerHome({ myCalls, onOpenLog }) {
           {urgent.length>0&&<Badge color="amber">{urgent.length}</Badge>}
         </div>
         {urgent.length===0?(
-          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>You’re all caught up — nothing new or due right now. 🎉</div>
+          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>You’re all caught up — nothing new or due right now.</div>
         ):uVis.map(c=><LeadRow key={c.id} c={c} onOpenLog={onOpenLog}/>)}
         {uRem>0&&(
           <div style={{padding:'14px 18px',textAlign:'center'}}>
@@ -1499,7 +1513,7 @@ function CallerPayouts({ emp, deals, assignments }) {
             <div key={p.id} style={{padding:'14px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
               <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:p.entries?.length?'10px':'0'}}>
                 <div><div style={{fontSize:'13px',fontWeight:'500'}}>{fmtDate(p.startDate)} → {fmtDate(p.endDate)}</div><div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>{p.discounts} deal{p.discounts!==1?'s':''} · {fmt$(periodAmt(p))}</div></div>
-                <div style={{display:'flex',gap:'8px',alignItems:'center'}}>{p.source==='csv'&&<Badge color="blue">CSV</Badge>}<Badge color={p.paid?'teal':'amber'}>{p.paid?'✓ Paid':'⏳ Pending'}</Badge></div>
+                <div style={{display:'flex',gap:'8px',alignItems:'center'}}>{p.source==='csv'&&<Badge color="blue">CSV</Badge>}<Badge color={p.paid?'teal':'amber'}>{p.paid?'Paid':'Pending'}</Badge></div>
               </div>
               {p.entries?.length>0&&(
                 <div style={{display:'flex',flexWrap:'wrap',gap:'5px',marginTop:'8px'}}>
@@ -1521,7 +1535,7 @@ function CallerPayouts({ emp, deals, assignments }) {
             <div style={{fontSize:'12px',color:'var(--color-text-secondary)',whiteSpace:'nowrap'}}>{fmtDate(p.date)}</div>
             <div><div style={{fontSize:'13px',marginBottom:'3px'}}>{p.desc}</div><Badge color={p.type==='upfront'?'amber':p.type==='backend'?'teal':'blue'}>{p.type==='upfront'?'Deal upfront':p.type==='backend'?'Deal backend':'Merchant'}</Badge></div>
             <div style={{fontFamily:'var(--font-mono)',fontSize:'15px',fontWeight:'500',color:'#0F6E56',whiteSpace:'nowrap'}}>{fmt$(p.amount)}</div>
-            <Badge color={p.paid?'teal':'amber'}>{p.paid?'✓ Paid':'⏳ Pending'}</Badge>
+            <Badge color={p.paid?'teal':'amber'}>{p.paid?'Paid':'Pending'}</Badge>
           </div>
         ))}
       </div>
@@ -1564,7 +1578,7 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
       {recs.length>1&&(
         <div style={{display:'flex',gap:'6px',flexWrap:'wrap',marginBottom:'8px'}}>
           {recs.map(r=>(
-            <button key={r.take} onClick={()=>load(r)} style={{...BTN(false),padding:'4px 9px',fontSize:'11px',...(r.take===call.submittedTake?{borderColor:'#5DCAA5',color:'#0F6E56'}:{})}}>Take {r.take}{r.take===call.submittedTake?' ✓':''}</button>
+            <button key={r.take} onClick={()=>load(r)} style={{...BTN(false),padding:'4px 9px',fontSize:'11px',...(r.take===call.submittedTake?{borderColor:'#5DCAA5',color:'#0F6E56'}:{})}}>Take {r.take}{r.take===call.submittedTake?' (chosen)':''}</button>
           ))}
         </div>
       )}
@@ -1768,7 +1782,7 @@ function LeadImportModal({ employees, onImport, onClose }) {
           );})}
         </div>
       </div>
-      {!map.business&&<div style={{background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#854F0B',marginBottom:'14px'}}>⚠ Pick which column is the <b>Business name</b> — it’s required.</div>}
+      {!map.business&&<div style={{display:'flex',alignItems:'center',gap:'7px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#854F0B',marginBottom:'14px'}}><AlertTriangle size={14} style={{flexShrink:0}}/><span>Pick which column is the <b>Business name</b> — it’s required.</span></div>}
       <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
         <button style={BTN(false)} onClick={()=>setStep('upload')}>Back</button>
         <button style={{...BTN(true),opacity:(callerId&&map.business&&validRows.length)?1:0.5}} disabled={!(callerId&&map.business&&validRows.length)} onClick={confirm}>Import {validRows.length} leads</button>
