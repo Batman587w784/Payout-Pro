@@ -117,10 +117,10 @@ const Metric = ({label,value,color,sub}) => <div style={{background:'var(--color
 const Field = ({label,children}) => <div style={{marginBottom:'13px'}}><label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>{label}</label>{children}</div>;
 const HR = () => <div style={{height:'0.5px',background:'var(--color-border-tertiary)',margin:'14px 0'}}/>;
 
-function ModalWrap({title,onClose,children,wide}) {
+function ModalWrap({title,onClose,children,wide,maxWidth}) {
   return (
     <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.45)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:200,padding:'20px'}}>
-      <div style={{...CARD,width:'100%',maxWidth:wide?'820px':'500px',maxHeight:'92vh',overflowY:'auto',background:'var(--color-background-primary)'}}>
+      <div style={{...CARD,width:'100%',maxWidth:maxWidth||(wide?'820px':'500px'),maxHeight:'92vh',overflowY:'auto',background:'var(--color-background-primary)'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'15px 20px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
           <h3 style={{margin:0,fontSize:'15px',fontWeight:'500'}}>{title}</h3>
           <button onClick={onClose} style={{...BTN(false),padding:'4px 9px',fontSize:'18px',lineHeight:1}}>×</button>
@@ -210,11 +210,11 @@ function EmployeePortal({employees,deals,assignments,calls,userEmail,onSignOut,o
   const myCalls = calls.filter(c=>c.callerId===emp.id);
   const queueCount = myCalls.filter(c=>c.status==='to_call'||c.status==='callback'||c.status==='no_answer').length;
   const logCall = myCalls.find(c=>c.id===logId); // derived fresh so recordings update live
-  const TABS=[['home','My Leads',Building2],['payouts','Payouts',DollarSign]];
+  const TABS=[['home','My Leads',Building2],['crm','CRM',Users],['payouts','Payouts',DollarSign]];
 
   return (
     <div style={{minHeight:'100vh',background:'#f1f5f9',padding:'20px'}}>
-      <div style={{maxWidth:'820px',margin:'0 auto'}}>
+      <div style={{maxWidth:'1100px',margin:'0 auto'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'18px'}}>
           <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
             <div style={{width:'40px',height:'40px',borderRadius:'50%',background:'#E1F5EE',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:'600',color:'#0F6E56'}}>{initials(emp.name)}</div>
@@ -232,6 +232,7 @@ function EmployeePortal({employees,deals,assignments,calls,userEmail,onSignOut,o
         </div>
 
         {screen==='home'&&<CallerHome myCalls={myCalls} onOpenLog={c=>setLogId(c.id)}/>}
+        {screen==='crm'&&<CallerCRM myCalls={myCalls} onOpenLog={c=>setLogId(c.id)}/>}
         {screen==='payouts'&&<CallerPayouts emp={emp} deals={deals} assignments={assignments}/>}
       </div>
       {logCall&&<LogCallModal call={logCall} callerName={emp.name} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake} onClose={()=>setLogId('')}/>}
@@ -1090,8 +1091,7 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake 
 
 // ── Log Call cockpit — one focused view per lead: record anytime, read the script, pick an outcome ──
 const OUTCOMES = [
-  ['interested',    'Interested',     'teal',  'Confirm + record'],
-  ['send_info',     'Send me info',   'blue',  '3-touch follow-up'],
+  ['interested',    'Interested',     'teal',  'Grab their details + record'],
   ['callback',      'Call back',      'blue',  'Schedule a time'],
   ['no_answer',     'No answer',      'amber', 'Stays in rotation'],
   ['not_interested','Not interested', 'red',   'Keep their info'],
@@ -1128,7 +1128,6 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
   const [offerDetails,setOfferDetails]=useState(call.offerDetails||call.discount||'');
   const [cbDate,setCbDate]=useState(call.callbackDate||addDays(today(),2));
   const [note,setNote]=useState('');
-  const [warn,setWarn]=useState('');
 
   const setDmF=(k,v)=>setDm(d=>({...d,[k]:v}));
   const setAddr=(i,k,v)=>setAddresses(a=>a.map((x,j)=>j===i?{...x,[k]:v}:x));
@@ -1146,29 +1145,98 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
 
   const save=()=>{
     if(outcome==='interested'){
-      if(submittedTake==null){ setWarn('Please record and choose a verification recording (“Use this recording”) before saving.'); return; }
       const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
-      commit({ status:'interested', verifyStatus:'pending', submittedTake, decisionMaker:dm, spokeTo, email, phone,
-        business:businessName||call.business, businessType, category:businessType, addresses,
-        location:loc||call.location||'', offerDetails, recordedAt:new Date().toISOString() });
-    } else if(outcome==='send_info'){
-      commit({ status:'send_info', spokeTo, email, phone, decisionMaker:dm,
-        followUp:{touchesDone:0, nextDue:addDays(today(),2)} });
+      commit({ status:'interested',
+        ...(submittedTake!=null ? {verifyStatus:'pending', submittedTake, recordedAt:new Date().toISOString()} : {}),
+        decisionMaker:dm, spokeTo, email, phone, business:businessName||call.business,
+        businessType, category:businessType, addresses, location:loc||call.location||'', offerDetails });
     } else if(outcome==='callback'){
       commit({ status:'callback', callbackDate:cbDate, spokeTo, email, phone, decisionMaker:dm });
     } else if(outcome==='no_answer'){
-      commit({ status:'no_answer' });
+      commit({ status:'no_answer', ...(spokeTo?{spokeTo}:{}) });
     } else if(outcome==='not_interested'){
       commit({ status:'not_interested', spokeTo, email, phone, decisionMaker:dm });
     }
   };
 
   return (
-    <ModalWrap title={`Log call — ${call.business}`} onClose={onClose} wide>
+    <ModalWrap title={`Log call — ${call.business}`} onClose={onClose} wide maxWidth="1060px">
       <div style={{fontSize:'12px',color:'#64748b',marginBottom:'4px'}}>{[call.contact,call.phone,call.location].filter(Boolean).join(' · ')||'No contact details yet'}</div>
       {call.notes&&<div style={{background:'var(--color-background-secondary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px',fontSize:'12px',color:'#0f172a',whiteSpace:'pre-wrap',margin:'8px 0 0',lineHeight:1.5}}><b style={{color:'#64748b'}}>Previous notes</b><br/>{call.notes}</div>}
 
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'14px',margin:'14px 0'}}>
+      {/* Outcome buttons first — the very first thing you see */}
+      <div style={{fontWeight:'600',fontSize:'16px',margin:'16px 0 12px'}}>How did the call go?</div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(190px,1fr))',gap:'12px',marginBottom:'16px'}}>
+        {OUTCOMES.map(([key,label,color,sub])=>{
+          const on=outcome===key; const c=CC[color];
+          return (
+            <button key={key} onClick={()=>setOutcome(key)}
+              style={{textAlign:'left',padding:'18px 20px',cursor:'pointer',borderRadius:'var(--border-radius-lg)',
+                border:`1px solid ${on?c.br:'var(--color-border-tertiary)'}`,background:on?c.bg:'var(--color-background-primary)',
+                boxShadow:on?`0 0 0 2px ${c.br}`:'none',fontFamily:'var(--font-sans)',transition:'all 0.12s'}}>
+              <div style={{fontSize:'16px',fontWeight:'600',color:on?c.tx:'#0f172a'}}>{label}</div>
+              <div style={{fontSize:'12px',color:'#64748b',marginTop:'3px'}}>{sub}</div>
+            </button>
+          );
+        })}
+      </div>
+
+      {outcome==='interested'&&(
+        <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
+          <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'4px'}}>Their details</div>
+          <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>Grab everything you can — even if they still have to think it over or check with someone, save what you got and follow up.</div>
+          <DMFields dm={dm} set={setDmF}/>
+          <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
+            <Field label="Business name"><input style={INP} value={businessName} onChange={e=>setBusinessName(e.target.value)}/></Field>
+            <Field label="Business type / category"><input style={INP} value={businessType} onChange={e=>setBusinessType(e.target.value)}/></Field>
+          </div>
+          <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>Address(es) — confirm every location</label>
+          {addresses.map((a,i)=>(
+            <div key={i} style={{display:'grid',gridTemplateColumns:'1.6fr 1fr 0.8fr auto',gap:'6px',marginBottom:'6px'}}>
+              <input style={INP} placeholder="Street" value={a.street} onChange={e=>setAddr(i,'street',e.target.value)}/>
+              <input style={INP} placeholder="City" value={a.city} onChange={e=>setAddr(i,'city',e.target.value)}/>
+              <input style={INP} placeholder="State" value={a.state} onChange={e=>setAddr(i,'state',e.target.value)}/>
+              <button style={{...BTN(false),padding:'5px 8px'}} onClick={()=>addresses.length>1?rmAddr(i):setAddr(i,'street','')} title="Remove"><Trash2 size={12}/></button>
+            </div>
+          ))}
+          <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px',marginBottom:'12px'}} onClick={addAddr}><Plus size={12}/>Add location</button>
+          <Field label="Offer / discount details (enter what they agreed to)"><textarea style={{...INP,minHeight:'52px',resize:'vertical'}} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)}/></Field>
+          <NoteField note={note} setNote={setNote}/>
+          <div style={{fontSize:'12px',color:submittedTake!=null?'#0F6E56':'#64748b',marginBottom:'10px'}}>{submittedTake!=null?'✓ Recording attached — this goes to your admin to verify and pay.':'No recording yet — scroll down to record the confirmation, or just save their details and come back.'}</div>
+          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}><CheckCircle size={14}/>Save interested</button>
+        </div>
+      )}
+      {outcome==='callback'&&(
+        <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
+            <Field label="Call back on"><input style={INP} type="date" value={cbDate} onChange={e=>setCbDate(e.target.value)}/></Field>
+            <Field label="Who did you speak to?"><input style={INP} value={spokeTo} onChange={e=>setSpokeTo(e.target.value)}/></Field>
+          </div>
+          <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
+          <NoteField note={note} setNote={setNote}/>
+          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save callback</button>
+        </div>
+      )}
+      {outcome==='no_answer'&&(
+        <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
+          <div style={{fontSize:'13px',color:'#64748b',marginBottom:'12px'}}>Logs a no-answer — this lead stays in your rotation to try again.</div>
+          <NoteField note={note} setNote={setNote}/>
+          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save</button>
+        </div>
+      )}
+      {outcome==='not_interested'&&(
+        <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
+          <div style={{fontSize:'13px',color:'#64748b',marginBottom:'12px'}}>Not interested — still keep whatever contact info you got.</div>
+          <Field label="Who did you speak to? (owner/contact)"><input style={INP} value={spokeTo} onChange={e=>setSpokeTo(e.target.value)}/></Field>
+          <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
+          <NoteField note={note} setNote={setNote}/>
+          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save</button>
+        </div>
+      )}
+
+      {/* Script + recorder moved below the outcome buttons */}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'14px',marginTop:'4px'}}>
         <div style={{...CARD,padding:'16px'}}>
           <div style={{fontSize:'11px',fontWeight:'600',textTransform:'uppercase',letterSpacing:'0.6px',color:'#64748b',marginBottom:'10px'}}>Recording script — read once they’re interested</div>
           <div style={{fontSize:'13px',lineHeight:1.65,color:'#0f172a'}}>
@@ -1187,103 +1255,57 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
         </div>
         <div>
           <CallRecorder call={call} callerName={callerName} submittedTake={submittedTake}
-            onTakeSaved={take=>onAddRecordingTake(call.id,take)} onUseTake={take=>{setSubmittedTake(take.take);setWarn('');}}/>
+            onTakeSaved={take=>onAddRecordingTake(call.id,take)} onUseTake={take=>setSubmittedTake(take.take)}/>
           <div style={{fontSize:'12px',color:'#64748b',marginTop:'10px',lineHeight:1.5}}>Put the call on <b>speakerphone</b> near your computer so the recording captures both voices. Every take is saved — you can re-record and pick the good one.</div>
         </div>
       </div>
-
-      <div style={{fontWeight:'500',fontSize:'14px',margin:'6px 0 10px'}}>How did the call go?</div>
-      <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'14px'}}>
-        {OUTCOMES.map(([key,label,color,sub])=>{
-          const on=outcome===key; const c=CC[color];
-          return (
-            <button key={key} onClick={()=>{setOutcome(key);setWarn('');}}
-              style={{flex:'1 1 140px',textAlign:'left',padding:'11px 13px',cursor:'pointer',borderRadius:'var(--border-radius-md)',
-                border:`0.5px solid ${on?c.br:'var(--color-border-tertiary)'}`,background:on?c.bg:'var(--color-background-primary)',fontFamily:'var(--font-sans)'}}>
-              <div style={{fontSize:'13px',fontWeight:'600',color:on?c.tx:'#0f172a'}}>{label}</div>
-              <div style={{fontSize:'11px',color:'#64748b',marginTop:'2px'}}>{sub}</div>
-            </button>
-          );
-        })}
-      </div>
-
-      {outcome==='interested'&&(
-        <div style={{...CARD,padding:'16px',marginBottom:'12px'}}>
-          <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'10px'}}>Discount confirmation</div>
-          <DMFields dm={dm} set={setDmF}/>
-          <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
-            <Field label="Business name"><input style={INP} value={businessName} onChange={e=>setBusinessName(e.target.value)}/></Field>
-            <Field label="Business type / category"><input style={INP} value={businessType} onChange={e=>setBusinessType(e.target.value)}/></Field>
-          </div>
-          <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>Address(es) — confirm every location</label>
-          {addresses.map((a,i)=>(
-            <div key={i} style={{display:'grid',gridTemplateColumns:'1.6fr 1fr 0.8fr auto',gap:'6px',marginBottom:'6px'}}>
-              <input style={INP} placeholder="Street" value={a.street} onChange={e=>setAddr(i,'street',e.target.value)}/>
-              <input style={INP} placeholder="City" value={a.city} onChange={e=>setAddr(i,'city',e.target.value)}/>
-              <input style={INP} placeholder="State" value={a.state} onChange={e=>setAddr(i,'state',e.target.value)}/>
-              <button style={{...BTN(false),padding:'5px 8px'}} onClick={()=>addresses.length>1?rmAddr(i):setAddr(i,'street','')} title="Remove"><Trash2 size={12}/></button>
-            </div>
-          ))}
-          <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px',marginBottom:'12px'}} onClick={addAddr}><Plus size={12}/>Add location</button>
-          <Field label="Offer / discount details"><textarea style={{...INP,minHeight:'52px',resize:'vertical'}} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)}/></Field>
-          <NoteField note={note} setNote={setNote}/>
-          {warn&&<div style={{background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'9px 12px',fontSize:'12px',color:'#854F0B',marginBottom:'12px'}}>{warn}</div>}
-          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}><CheckCircle size={14}/>Save — send to admin to verify</button>
-        </div>
-      )}
-      {outcome==='send_info'&&(
-        <div style={{...CARD,padding:'16px',marginBottom:'12px'}}>
-          <div style={{fontSize:'13px',color:'#64748b',marginBottom:'12px'}}>Puts them on a {FOLLOWUP_TOUCHES}-touch follow-up track (next touch due {fmtDate(addDays(today(),2))}). Capture whatever you got:</div>
-          <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
-          <NoteField note={note} setNote={setNote}/>
-          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save follow-up</button>
-        </div>
-      )}
-      {outcome==='callback'&&(
-        <div style={{...CARD,padding:'16px',marginBottom:'12px'}}>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
-            <Field label="Call back on"><input style={INP} type="date" value={cbDate} onChange={e=>setCbDate(e.target.value)}/></Field>
-            <Field label="Who did you speak to?"><input style={INP} value={spokeTo} onChange={e=>setSpokeTo(e.target.value)}/></Field>
-          </div>
-          <NoteField/>
-          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save callback</button>
-        </div>
-      )}
-      {outcome==='no_answer'&&(
-        <div style={{...CARD,padding:'16px',marginBottom:'12px'}}>
-          <div style={{fontSize:'13px',color:'#64748b',marginBottom:'12px'}}>Logs a no-answer — this lead stays in your rotation to try again.</div>
-          <NoteField note={note} setNote={setNote}/>
-          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save</button>
-        </div>
-      )}
-      {outcome==='not_interested'&&(
-        <div style={{...CARD,padding:'16px',marginBottom:'12px'}}>
-          <div style={{fontSize:'13px',color:'#64748b',marginBottom:'12px'}}>Not interested — still keep whatever contact info you got.</div>
-          <Field label="Who did you speak to? (owner/contact)"><input style={INP} value={spokeTo} onChange={e=>setSpokeTo(e.target.value)}/></Field>
-          <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
-          <NoteField note={note} setNote={setNote}/>
-          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save</button>
-        </div>
-      )}
     </ModalWrap>
   );
 }
 
 // ── My Leads — concise, batched list; each lead opens the Log Call cockpit ──
 const LEAD_BATCH = 10;
+// Shared lead row used by both My Leads sections
+function LeadRow({ c, onOpenLog }) {
+  const st=CALL_STATUS[c.status]||CALL_STATUS.to_call;
+  const overdue=c.status==='callback'&&c.callbackDate&&c.callbackDate<today();
+  return (
+    <div style={{display:'grid',gridTemplateColumns:'34px 1fr auto auto',gap:'12px',alignItems:'center',padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+      <div style={{width:'34px',height:'34px',borderRadius:'50%',background:'var(--color-background-info)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',fontWeight:'600',color:'var(--color-text-info)'}}>{initials(c.contact||c.business||'?')}</div>
+      <div>
+        <div style={{fontWeight:'500',fontSize:'14px'}}>{c.business}</div>
+        <div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>{[c.contact,c.phone,c.location].filter(Boolean).join(' · ')||'No contact details'}</div>
+      </div>
+      <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+        {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:overdue?'#A32D2D':'#185FA5',fontWeight:'500'}}>{overdue?'Due ':''}{fmtDate(c.callbackDate)}</span>}
+        {(c.status==='interested'||c.status==='recorded')&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
+        <Badge color={st.color}>{st.label}</Badge>
+      </div>
+      <button style={{...BTN(true),padding:'6px 12px',fontSize:'12px',whiteSpace:'nowrap'}} onClick={()=>onOpenLog(c)}><Phone size={12}/>Log Call</button>
+    </div>
+  );
+}
+
 function CallerHome({ myCalls, onOpenLog }) {
-  const order={callback:0,to_call:1,no_answer:2,send_info:3,interested:4,recorded:4,not_interested:5};
-  const sorted=[...myCalls].sort((a,b)=>((order[a.status]??9)-(order[b.status]??9))||((a.callbackDate||'').localeCompare(b.callbackDate||'')));
+  const t=today();
+  // "Up next" = never contacted, or a callback whose date has arrived / passed
+  const isUrgent=c=>c.status==='to_call'||(c.status==='callback'&&(c.callbackDate||'')<=t);
+  const urgent=myCalls.filter(isUrgent).sort((a,b)=>{
+    const ac=a.status==='callback'?0:1, bc=b.status==='callback'?0:1;
+    return (ac-bc)||((a.callbackDate||'').localeCompare(b.callbackDate||''));
+  });
+  const order={callback:0,interested:1,recorded:1,no_answer:2,not_interested:3};
+  const rest=myCalls.filter(c=>!isUrgent(c)).sort((a,b)=>((order[a.status]??9)-(order[b.status]??9))||((a.callbackDate||'').localeCompare(b.callbackDate||'')));
   const counts={
     to_call: myCalls.filter(c=>c.status==='to_call').length,
     callback: myCalls.filter(c=>c.status==='callback').length,
     no_answer: myCalls.filter(c=>c.status==='no_answer').length,
     interested: myCalls.filter(c=>c.status==='interested'||c.status==='recorded').length,
   };
-  const [shown,setShown]=useState(LEAD_BATCH);
-  const visible=sorted.slice(0,shown);
-  const remaining=Math.max(0,sorted.length-visible.length);
+  const [shownU,setShownU]=useState(LEAD_BATCH);
+  const [shownR,setShownR]=useState(LEAD_BATCH);
+  const uVis=urgent.slice(0,shownU), uRem=urgent.length-uVis.length;
+  const rVis=rest.slice(0,shownR), rRem=rest.length-rVis.length;
   return (
     <div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',marginBottom:'16px'}}>
@@ -1292,36 +1314,78 @@ function CallerHome({ myCalls, onOpenLog }) {
         <Metric label="No answer" value={counts.no_answer} color="#854F0B"/>
         <Metric label="Interested" value={counts.interested} color="#0F6E56"/>
       </div>
+
+      <div style={{...CARD,marginBottom:'14px'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+          <span style={{fontWeight:'600',fontSize:'14px'}}>Up next — new leads & due callbacks</span>
+          {urgent.length>0&&<Badge color="amber">{urgent.length}</Badge>}
+        </div>
+        {urgent.length===0?(
+          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>You’re all caught up — nothing new or due right now. 🎉</div>
+        ):uVis.map(c=><LeadRow key={c.id} c={c} onOpenLog={onOpenLog}/>)}
+        {uRem>0&&(
+          <div style={{padding:'14px 18px',textAlign:'center'}}>
+            <button style={BTN(false)} onClick={()=>setShownU(s=>s+LEAD_BATCH)}>{uRem} more — Show {Math.min(LEAD_BATCH,uRem)}</button>
+          </div>
+        )}
+      </div>
+
       <div style={CARD}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-          <span style={{fontWeight:'500',fontSize:'14px'}}>My leads</span>
-          <span style={{fontSize:'12px',color:'#64748b'}}>{sorted.length} total</span>
+          <span style={{fontWeight:'500',fontSize:'14px'}}>Everything else</span>
+          <span style={{fontSize:'12px',color:'#64748b'}}>{myCalls.length} total</span>
         </div>
-        {sorted.length===0?(
+        {myCalls.length===0?(
           <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Nothing assigned yet. When your admin imports or assigns merchants for you to call, they’ll show up here.</div>
-        ):visible.map(c=>{
-          const st=CALL_STATUS[c.status]||CALL_STATUS.to_call;
+        ):rest.length===0?(
+          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Everyone you’ve already logged will collect here.</div>
+        ):rVis.map(c=><LeadRow key={c.id} c={c} onOpenLog={onOpenLog}/>)}
+        {rRem>0&&(
+          <div style={{padding:'14px 18px',textAlign:'center'}}>
+            <button style={BTN(false)} onClick={()=>setShownR(s=>s+LEAD_BATCH)}>{rRem} more — Show {Math.min(LEAD_BATCH,rRem)}</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── CRM board — logged leads grouped into columns (ClickUp-style) ──
+const CRM_COLS = [
+  ['callback',      'Call back',      'blue'],
+  ['interested',    'Interested',     'teal'],
+  ['no_answer',     'No answer',      'amber'],
+  ['not_interested','Not interested', 'red'],
+];
+function CallerCRM({ myCalls, onOpenLog }) {
+  const inCol=(c,key)=>key==='interested'?(c.status==='interested'||c.status==='recorded'):c.status===key;
+  return (
+    <div>
+      <div style={{fontSize:'13px',color:'#64748b',marginBottom:'14px'}}>Everyone you’ve logged, grouped by where they stand. Click a card to update it.</div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,minmax(220px,1fr))',gap:'12px',overflowX:'auto',paddingBottom:'6px'}}>
+        {CRM_COLS.map(([key,label,color])=>{
+          const c=CC[color]; const items=myCalls.filter(x=>inCol(x,key));
           return (
-            <div key={c.id} style={{display:'grid',gridTemplateColumns:'34px 1fr auto auto',gap:'12px',alignItems:'center',padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-              <div style={{width:'34px',height:'34px',borderRadius:'50%',background:'var(--color-background-info)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',fontWeight:'600',color:'var(--color-text-info)'}}>{initials(c.contact||c.business||'?')}</div>
-              <div>
-                <div style={{fontWeight:'500',fontSize:'14px'}}>{c.business}</div>
-                <div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>{[c.contact,c.phone,c.location].filter(Boolean).join(' · ')||'No contact details'}</div>
+            <div key={key} style={{...CARD,background:'var(--color-background-secondary)',minWidth:0,alignSelf:'start'}}>
+              <div style={{padding:'10px 12px',borderBottom:`2px solid ${c.br}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontWeight:'600',fontSize:'13px',color:c.tx}}>{label}</span>
+                <Badge color={color}>{items.length}</Badge>
               </div>
-              <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
-                {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:'#185FA5',fontWeight:'500'}}>{fmtDate(c.callbackDate)}</span>}
-                {(c.status==='interested'||c.status==='recorded')&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
-                <Badge color={st.color}>{st.label}</Badge>
+              <div style={{padding:'8px',display:'flex',flexDirection:'column',gap:'8px',minHeight:'60px'}}>
+                {items.length===0?(
+                  <div style={{fontSize:'12px',color:'#94a3b8',textAlign:'center',padding:'16px 8px'}}>Empty</div>
+                ):items.map(x=>(
+                  <button key={x.id} onClick={()=>onOpenLog(x)} style={{textAlign:'left',background:'var(--color-background-primary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 11px',cursor:'pointer',fontFamily:'var(--font-sans)'}}>
+                    <div style={{fontWeight:'500',fontSize:'13px',color:'#0f172a'}}>{x.business}</div>
+                    <div style={{fontSize:'11px',color:'#64748b',marginTop:'2px'}}>{[x.contact,x.phone].filter(Boolean).join(' · ')||'—'}</div>
+                    {x.status==='callback'&&x.callbackDate&&<div style={{fontSize:'11px',color:x.callbackDate<today()?'#A32D2D':'#185FA5',fontWeight:'500',marginTop:'3px'}}>Call back {fmtDate(x.callbackDate)}</div>}
+                    {(x.status==='interested'||x.status==='recorded')&&x.verifyStatus&&<div style={{marginTop:'4px'}}><Badge color={VERIFY[x.verifyStatus].color}>{VERIFY[x.verifyStatus].label}</Badge></div>}
+                  </button>
+                ))}
               </div>
-              <button style={{...BTN(true),padding:'6px 12px',fontSize:'12px',whiteSpace:'nowrap'}} onClick={()=>onOpenLog(c)}><Phone size={12}/>Log Call</button>
             </div>
           );
         })}
-        {remaining>0&&(
-          <div style={{padding:'14px 18px',textAlign:'center'}}>
-            <button style={BTN(false)} onClick={()=>setShown(s=>s+LEAD_BATCH)}>You have {remaining} left — Show {Math.min(LEAD_BATCH,remaining)} more</button>
-          </div>
-        )}
       </div>
     </div>
   );
