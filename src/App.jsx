@@ -4,7 +4,8 @@ import Papa from 'papaparse';
 import {
   Plus, ArrowLeft, Trash2, ChevronRight, ChevronUp, ChevronDown,
   FileText, Users, Building2, DollarSign, Calendar,
-  Upload, LogOut, CheckCircle, Shield, Download
+  Upload, LogOut, CheckCircle, Shield, Download,
+  Phone, Video, Circle, Square, Play
 } from "lucide-react";
 
 // ─── Supabase ─────────────────────────────────────────────────────
@@ -190,147 +191,49 @@ function LoginPage() {
   );
 }
 
-// ─── EMPLOYEE PORTAL ──────────────────────────────────────────────
-function EmployeePortal({employees,deals,assignments,userEmail,onSignOut}) {
+// ─── EMPLOYEE / CALLER PORTAL ─────────────────────────────────────
+function EmployeePortal({employees,deals,assignments,calls,userEmail,onSignOut,onUpdateCall,onSaveRecording}) {
+  const [screen,setScreen]=useState('home');
+  const [preselect,setPreselect]=useState('');
   const emp = employees.find(e=>e.email?.toLowerCase()===userEmail?.toLowerCase());
   if (!emp) return (
     <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',background:'#f1f5f9'}}>
       <div style={{...CARD,padding:'32px',textAlign:'center',maxWidth:'420px',background:'#ffffff'}}>
         <Shield size={32} style={{margin:'0 auto 12px',display:'block',color:'#64748b'}}/>
         <div style={{fontWeight:'500',marginBottom:'8px'}}>Account not linked</div>
-        <div style={{fontSize:'13px',color:'#64748b',marginBottom:'20px'}}>Your email ({userEmail}) hasn't been added to the employee roster yet. Contact your admin at shuffman@tailgateofficial.com.</div>
+        <div style={{fontSize:'13px',color:'#64748b',marginBottom:'20px'}}>Your email ({userEmail}) hasn't been added to the roster yet. Contact your admin at shuffman@tailgateofficial.com.</div>
         <button style={BTN(false)} onClick={onSignOut}><LogOut size={13}/>Sign out</button>
       </div>
     </div>
   );
 
-  const payments   = getPayments(emp.id,deals,assignments);
-  const total      = payments.reduce((s,p)=>s+p.amount,0);
-  const pending    = payments.filter(p=>!p.paid).reduce((s,p)=>s+p.amount,0);
-  const paid       = payments.filter(p=>p.paid).reduce((s,p)=>s+p.amount,0);
-
-  // Deals this rep is setter or closer on
-  const myDeals = deals.filter(d=>d.setter?.employeeId===emp.id||d.closer?.employeeId===emp.id);
-
-  // Merchant periods for this rep
-  const myAssignment = assignments.find(a=>a.employeeId===emp.id);
-  const myPeriods = myAssignment?.periods || [];
+  const myCalls = calls.filter(c=>c.callerId===emp.id);
+  const queueCount = myCalls.filter(c=>c.status==='to_call'||c.status==='callback').length;
+  const goRecord = id => { setPreselect(id||''); setScreen('calling'); };
+  const TABS=[['home','Home',Building2],['calling','Calling',Phone],['payouts','Payouts',DollarSign]];
 
   return (
     <div style={{minHeight:'100vh',background:'#f1f5f9',padding:'20px'}}>
-      <div style={{maxWidth:'760px',margin:'0 auto'}}>
-
-        {/* Header */}
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'22px'}}>
+      <div style={{maxWidth:'820px',margin:'0 auto'}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'18px'}}>
           <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
             <div style={{width:'40px',height:'40px',borderRadius:'50%',background:'#E1F5EE',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:'600',color:'#0F6E56'}}>{initials(emp.name)}</div>
-            <div><div style={{fontWeight:'500',fontSize:'16px'}}>{emp.name}</div><div style={{fontSize:'12px',color:'#64748b'}}>Your payout portal</div></div>
+            <div><div style={{fontWeight:'500',fontSize:'16px'}}>{emp.name}</div><div style={{fontSize:'12px',color:'#64748b'}}>Merchant caller portal</div></div>
           </div>
           <button style={BTN(false)} onClick={onSignOut}><LogOut size={13}/>Sign out</button>
         </div>
 
-        {/* Summary */}
-        <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px',marginBottom:'18px'}}>
-          <Metric label="Total earned" value={fmt$(total)}/>
-          <Metric label="Already paid" value={fmt$(paid)} color="#0F6E56"/>
-          <Metric label="Pending" value={fmt$(pending)} color="#854F0B"/>
-        </div>
-
-        {/* Active deals */}
-        {myDeals.length>0&&(
-          <div style={{...CARD,marginBottom:'14px'}}>
-            <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Your deals</span></div>
-            {myDeals.map(d=>{
-              const role = d.setter?.employeeId===emp.id?'setter':'closer';
-              const rate = d[role].ratePerCard;
-              const activated = d.monthlyActivations.reduce((a,b)=>a+b,0);
-              const pct = d.cardsOrdered>0?activated/d.cardsOrdered:0;
-              const upfront = 0.25*d.cardsOrdered*rate;
-              const backend = 0.75*activated*rate;
-              return (
-                <div key={d.id} style={{padding:'14px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'10px'}}>
-                    <div>
-                      <div style={{fontWeight:'500',fontSize:'14px'}}>{d.orgName}</div>
-                      <div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>
-                        {role==='setter'?'Appointment setter':'Closer'} · {fmt$(rate)}/card · starts {fmtYM(d.startMonth)}
-                      </div>
-                    </div>
-                    <Badge color={role==='setter'?'amber':'blue'}>{role==='setter'?'Setter':'Closer'}</Badge>
-                  </div>
-                  {/* Progress bar */}
-                  <div style={{marginBottom:'10px'}}>
-                    <div style={{display:'flex',justifyContent:'space-between',fontSize:'11px',color:'#64748b',marginBottom:'4px'}}>
-                      <span>Cards activated</span>
-                      <span style={{fontFamily:'var(--font-mono)'}}>{activated} / {d.cardsOrdered}</span>
-                    </div>
-                    <div style={{height:'4px',background:'var(--color-border-tertiary)',borderRadius:'2px'}}>
-                      <div style={{width:`${Math.min(100,pct*100)}%`,height:'100%',background:'#1D9E75',borderRadius:'2px'}}/>
-                    </div>
-                  </div>
-                  {/* Payout breakdown */}
-                  <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
-                    <div style={{background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px'}}>
-                      <div style={{fontSize:'11px',color:'#64748b',marginBottom:'3px'}}>Upfront (25%)</div>
-                      <div style={{fontFamily:'var(--font-mono)',fontWeight:'500',color:'#854F0B'}}>{fmt$(upfront)}</div>
-                    </div>
-                    <div style={{background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px'}}>
-                      <div style={{fontSize:'11px',color:'#64748b',marginBottom:'3px'}}>Backend (75%)</div>
-                      <div style={{fontFamily:'var(--font-mono)',fontWeight:'500',color:'#0F6E56'}}>{fmt$(backend)}</div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Merchant periods */}
-        {myPeriods.length>0&&(
-          <div style={{...CARD,marginBottom:'14px'}}>
-            <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Your merchant discount periods</span></div>
-            {myPeriods.map(p=>(
-              <div key={p.id} style={{padding:'14px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom: p.entries?.length?'10px':'0'}}>
-                  <div>
-                    <div style={{fontSize:'13px',fontWeight:'500'}}>{fmtDate(p.startDate)} → {fmtDate(p.endDate)}</div>
-                    <div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>{p.discounts} deal{p.discounts!==1?'s':''} · {fmt$(periodAmt(p))}</div>
-                  </div>
-                  <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
-                    {p.source==='csv'&&<Badge color="blue">CSV</Badge>}
-                    <Badge color={p.paid?'teal':'amber'}>{p.paid?'✓ Paid':'⏳ Pending'}</Badge>
-                  </div>
-                </div>
-                {/* Business list from CSV entries */}
-                {p.entries?.length>0&&(
-                  <div style={{display:'flex',flexWrap:'wrap',gap:'5px',marginTop:'8px'}}>
-                    {p.entries.filter(e=>e.tier!=='Redacted').map((e,i)=>(
-                      <span key={i} style={{fontSize:'11px',padding:'3px 8px',background:'var(--color-background-secondary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',color:'var(--color-text-primary)'}}>
-                        {e.business} <span style={{color:'#0F6E56',fontFamily:'var(--font-mono)',fontWeight:'500'}}>{e.tier}</span>
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Payment history */}
-        <div style={CARD}>
-          <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Payment history</span></div>
-          {payments.length===0?(
-            <div style={{padding:'40px',textAlign:'center',color:'var(--color-text-secondary)',fontSize:'13px'}}>No payments yet. Check back once deals are active.</div>
-          ):payments.map(p=>(
-            <div key={p.id} style={{display:'grid',gridTemplateColumns:'auto 1fr auto auto',gap:'14px',alignItems:'center',padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-              <div style={{fontSize:'12px',color:'var(--color-text-secondary)',whiteSpace:'nowrap'}}>{fmtDate(p.date)}</div>
-              <div><div style={{fontSize:'13px',marginBottom:'3px'}}>{p.desc}</div><Badge color={p.type==='upfront'?'amber':p.type==='backend'?'teal':'blue'}>{p.type==='upfront'?'Deal upfront':p.type==='backend'?'Deal backend':'Merchant'}</Badge></div>
-              <div style={{fontFamily:'var(--font-mono)',fontSize:'15px',fontWeight:'500',color:'#0F6E56',whiteSpace:'nowrap'}}>{fmt$(p.amount)}</div>
-              <Badge color={p.paid?'teal':'amber'}>{p.paid?'✓ Paid':'⏳ Pending'}</Badge>
-            </div>
+        <div style={{display:'flex',background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'3px',border:'0.5px solid var(--color-border-tertiary)',gap:'2px',marginBottom:'18px',width:'fit-content'}}>
+          {TABS.map(([key,label,Icon])=>(
+            <button key={key} onClick={()=>setScreen(key)} style={{display:'inline-flex',alignItems:'center',gap:'5px',padding:'7px 15px',borderRadius:'var(--border-radius-md)',border:'none',cursor:'pointer',fontSize:'13px',fontFamily:'var(--font-sans)',fontWeight:'500',background:screen===key?'#fff':'transparent',color:screen===key?'#0f172a':'#64748b',boxShadow:screen===key?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>
+              <Icon size={13}/>{label}{key==='home'&&queueCount>0?` (${queueCount})`:''}
+            </button>
           ))}
         </div>
 
+        {screen==='home'&&<CallerHome myCalls={myCalls} onUpdateCall={onUpdateCall} onGoRecord={goRecord}/>}
+        {screen==='calling'&&<CallerCalling key={preselect||'manual'} myCalls={myCalls} callerName={emp.name} onSaveRecording={onSaveRecording} initialId={preselect}/>}
+        {screen==='payouts'&&<CallerPayouts emp={emp} deals={deals} assignments={assignments}/>}
       </div>
     </div>
   );
@@ -1032,6 +935,442 @@ function PayStubModal({emp,period,onClose}) {
   );
 }
 
+// ═══ MERCHANT CALLING ═════════════════════════════════════════════
+const CALL_BUCKET = 'call-recordings';
+const CALL_STATUS = {
+  to_call:        {label:'To call',        color:'gray'},
+  callback:       {label:'Callback',       color:'blue'},
+  no_answer:      {label:'No answer',       color:'amber'},
+  not_interested: {label:'Not interested',  color:'red'},
+  recorded:       {label:'Recorded',        color:'teal'},
+};
+const VERIFY = {
+  pending:  {label:'Awaiting review', color:'amber'},
+  approved: {label:'Verified',        color:'teal'},
+  rejected: {label:'Needs redo',      color:'red'},
+};
+const REC_MIME = () => {
+  if (typeof MediaRecorder==='undefined') return '';
+  const types=['video/webm;codecs=vp9,opus','video/webm;codecs=vp8,opus','video/webm','video/mp4'];
+  return types.find(t=>{try{return MediaRecorder.isTypeSupported(t);}catch{return false;}}) || '';
+};
+const mmss = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+
+const ScriptLine = ({label,value}) => (
+  <div style={{display:'flex',justifyContent:'space-between',gap:'10px',padding:'3px 0',fontSize:'13px'}}>
+    <span style={{color:'#64748b'}}>{label}</span>
+    <span style={{fontWeight:'600',textAlign:'right'}}>{value}</span>
+  </div>
+);
+
+// ── Camera/mic recorder used on the caller's Calling screen ──
+function CallRecorder({ call, onSaved }) {
+  const [mediaMode,setMediaMode]=useState('video');
+  const [camOn,setCamOn]=useState(false);
+  const [recording,setRecording]=useState(false);
+  const [elapsed,setElapsed]=useState(0);
+  const [saving,setSaving]=useState(false);
+  const [error,setError]=useState('');
+  const [done,setDone]=useState(false);
+  const videoRef=useRef(null), streamRef=useRef(null), recRef=useRef(null), chunksRef=useRef([]), timerRef=useRef(null);
+
+  const stopStream=()=>{ if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;} };
+  useEffect(()=>()=>{ stopStream(); if(timerRef.current) clearInterval(timerRef.current); },[]);
+
+  const enable=async()=>{
+    setError('');
+    try{
+      const constraints = mediaMode==='video' ? {video:{width:640,height:480},audio:true} : {audio:true};
+      const stream=await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current=stream;
+      if(mediaMode==='video'&&videoRef.current){videoRef.current.srcObject=stream;videoRef.current.play().catch(()=>{});}
+      setCamOn(true);
+    }catch{ setError('Could not access your '+(mediaMode==='video'?'camera and microphone':'microphone')+'. Please click "Allow" when your browser asks for permission, then try again.'); }
+  };
+
+  const start=()=>{
+    if(!streamRef.current){setError('Turn on your '+(mediaMode==='video'?'camera':'microphone')+' first.');return;}
+    setError(''); chunksRef.current=[];
+    const mime=REC_MIME();
+    let rec;
+    try{ rec=new MediaRecorder(streamRef.current, mime?{mimeType:mime, videoBitsPerSecond:1000000}:undefined); }
+    catch{ setError('Recording is not supported in this browser. Please use Chrome.'); return; }
+    rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunksRef.current.push(e.data); };
+    rec.onstop=()=>save(rec.mimeType||mime||'video/webm');
+    rec.start(); recRef.current=rec;
+    setRecording(true); setElapsed(0);
+    timerRef.current=setInterval(()=>setElapsed(s=>s+1),1000);
+  };
+
+  const stop=()=>{
+    if(recRef.current&&recRef.current.state!=='inactive') recRef.current.stop();
+    if(timerRef.current){clearInterval(timerRef.current);timerRef.current=null;}
+    setRecording(false);
+  };
+
+  const save=async(mime)=>{
+    setSaving(true); setError('');
+    try{
+      const ext=mime.includes('mp4')?'mp4':'webm';
+      const blob=new Blob(chunksRef.current,{type:mime});
+      const path=`calls/${call.id}-${Date.now()}.${ext}`;
+      const {error:upErr}=await supabase.storage.from(CALL_BUCKET).upload(path,blob,{contentType:mime,upsert:false});
+      if(upErr) throw upErr;
+      await onSaved(call.id,{recordingPath:path, recordingMime:mime, durationSec:elapsed, sizeMB:+(blob.size/1048576).toFixed(1), mediaMode});
+      stopStream(); setCamOn(false); setDone(true);
+    }catch(e){
+      setError('Your recording was captured but the upload failed: '+(e.message||e)+'  —  Make sure the "'+CALL_BUCKET+'" storage bucket exists in Supabase.');
+    }finally{ setSaving(false); }
+  };
+
+  if(done) return (
+    <div style={{...CARD,padding:'32px',textAlign:'center'}}>
+      <CheckCircle size={34} style={{margin:'0 auto 10px',display:'block',color:'#0F6E56'}}/>
+      <div style={{fontWeight:'600',marginBottom:'4px'}}>Recording submitted</div>
+      <div style={{fontSize:'13px',color:'#64748b'}}>{call.business} was sent to your admin to verify.</div>
+    </div>
+  );
+
+  return (
+    <div style={{...CARD,padding:'18px'}}>
+      {!camOn&&!recording&&(
+        <div style={{display:'flex',gap:'6px',marginBottom:'14px',background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'3px',width:'fit-content'}}>
+          {[['video','Video + audio'],['audio','Audio only']].map(([m,l])=>(
+            <button key={m} onClick={()=>setMediaMode(m)} style={{padding:'6px 14px',border:'none',borderRadius:'var(--border-radius-md)',cursor:'pointer',fontSize:'12px',fontWeight:'500',fontFamily:'var(--font-sans)',background:mediaMode===m?'#ffffff':'transparent',color:mediaMode===m?'#0f172a':'#64748b',boxShadow:mediaMode===m?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>{l}</button>
+          ))}
+        </div>
+      )}
+      {mediaMode==='video'&&(
+        <div style={{position:'relative',background:'#0f172a',borderRadius:'var(--border-radius-md)',overflow:'hidden',aspectRatio:'4 / 3',marginBottom:'12px',display:'flex',alignItems:'center',justifyContent:'center'}}>
+          <video ref={videoRef} muted playsInline style={{width:'100%',height:'100%',objectFit:'cover',display:camOn?'block':'none'}}/>
+          {!camOn&&<div style={{color:'#94a3b8',fontSize:'13px'}}>Camera is off</div>}
+          {recording&&<div style={{position:'absolute',top:'10px',left:'10px',display:'flex',alignItems:'center',gap:'6px',background:'rgba(0,0,0,0.55)',borderRadius:'100px',padding:'4px 10px'}}><span style={{width:'8px',height:'8px',borderRadius:'50%',background:'#ef4444',animation:'tgpulse 1s infinite'}}/><span style={{color:'#fff',fontSize:'12px',fontFamily:'var(--font-mono)'}}>{mmss(elapsed)}</span></div>}
+        </div>
+      )}
+      {mediaMode==='audio'&&camOn&&(
+        <div style={{background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'18px',marginBottom:'12px',display:'flex',alignItems:'center',justifyContent:'center',gap:'10px'}}>
+          <span style={{width:'10px',height:'10px',borderRadius:'50%',background:recording?'#ef4444':'#94a3b8',animation:recording?'tgpulse 1s infinite':'none'}}/>
+          <span style={{fontSize:'13px',color:'#64748b'}}>{recording?`Recording — ${mmss(elapsed)}`:'Microphone ready'}</span>
+        </div>
+      )}
+      {error&&<div style={{background:'#FCEBEB',border:'0.5px solid #F09595',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#A32D2D',marginBottom:'12px',lineHeight:1.5}}>{error}</div>}
+      <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
+        {!camOn&&!recording&&<button style={BTN(false)} onClick={enable}>{mediaMode==='video'?<Video size={14}/>:<Play size={14}/>}Turn on {mediaMode==='video'?'camera':'mic'}</button>}
+        {camOn&&!recording&&!saving&&<button style={BTN(true)} onClick={start}><Circle size={13}/>Start recording</button>}
+        {recording&&<button style={{...BTN(true),background:'#dc2626',color:'#fff'}} onClick={stop}><Square size={12}/>Stop &amp; submit</button>}
+        {saving&&<div style={{fontSize:'13px',color:'#64748b'}}>Uploading…</div>}
+      </div>
+    </div>
+  );
+}
+
+// ── Calling screen ──
+function CallerCalling({ myCalls, callerName, onSaveRecording, initialId }) {
+  const open = myCalls.filter(c=>c.status!=='recorded' || c.verifyStatus==='rejected');
+  const [selId,setSelId]=useState(initialId||'');
+  const call = myCalls.find(c=>c.id===selId);
+
+  return (
+    <div>
+      <div style={{...CARD,padding:'16px',marginBottom:'14px'}}>
+        <Field label="Which merchant are you calling?">
+          <select style={INP} value={selId} onChange={e=>setSelId(e.target.value)}>
+            <option value="">Select a merchant…</option>
+            {open.map(c=><option key={c.id} value={c.id}>{c.business}{c.contact?` — ${c.contact}`:''}</option>)}
+          </select>
+        </Field>
+        {open.length===0&&<div style={{fontSize:'13px',color:'#64748b'}}>No merchants waiting to be called right now. New ones your admin assigns will show up here.</div>}
+      </div>
+
+      {call&&(
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'14px'}}>
+          <div style={{...CARD,padding:'18px'}}>
+            <div style={{fontSize:'11px',fontWeight:'600',textTransform:'uppercase',letterSpacing:'0.6px',color:'#64748b',marginBottom:'12px'}}>Read this on the call</div>
+            <div style={{fontSize:'13.5px',lineHeight:1.7,color:'#0f172a'}}>
+              <p style={{margin:'0 0 12px'}}>Hi, this is <b>{callerName}</b> with Tailgate Official. Before we go any further, I want to let you know this call is being recorded — is that okay with you?</p>
+              <div style={{background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'7px 11px',fontSize:'12px',color:'#854F0B',margin:'0 0 12px',fontWeight:'500'}}>⏸ Wait for them to say “yes.”</div>
+              <p style={{margin:'0 0 8px'}}>Great, thank you. I just want to quickly verify your discount details for our records:</p>
+              <div style={{background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'11px 13px',margin:'0 0 12px'}}>
+                <ScriptLine label="Business" value={call.business}/>
+                <ScriptLine label="Discount" value={call.discount||'—'}/>
+                <ScriptLine label="Location(s)" value={call.location||'—'}/>
+                <ScriptLine label="Your Tailgate rep" value={callerName}/>
+              </div>
+              <p style={{margin:'0 0 12px'}}>Does all of that sound correct, and do you agree to this discount as described?</p>
+              <div style={{background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'7px 11px',fontSize:'12px',color:'#854F0B',margin:'0 0 12px',fontWeight:'500'}}>⏸ Wait for them to say “yes.”</div>
+              <p style={{margin:0}}>Perfect — you’re all set. Thank you!</p>
+            </div>
+          </div>
+          <div>
+            <CallRecorder call={call} callerName={callerName} onSaved={onSaveRecording}/>
+            <div style={{fontSize:'12px',color:'#64748b',marginTop:'10px',lineHeight:1.5}}>Put the call on <b>speakerphone</b> near your computer so the recording captures both you and them. When you press stop, it uploads and goes to your admin to verify.</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Home / mini-CRM ──
+function CallEditor({ call, onUpdateCall, onGoRecord }) {
+  const [status,setStatus]=useState(call.status==='recorded'?'to_call':call.status);
+  const [cbDate,setCbDate]=useState(call.callbackDate||'');
+  const [note,setNote]=useState('');
+  const save=()=>{
+    const patch={status};
+    if(status==='callback') patch.callbackDate=cbDate||today();
+    if(note.trim()) patch.notes=(call.notes?call.notes+'\n\n':'')+`${today()}: ${note.trim()}`;
+    onUpdateCall(call.id,patch); setNote('');
+  };
+  return (
+    <div style={{padding:'0 18px 16px',background:'var(--color-background-secondary)'}}>
+      {call.discount&&<div style={{fontSize:'12px',color:'#64748b',padding:'12px 0 0'}}>Discount to verify: <b style={{color:'#0f172a'}}>{call.discount}</b></div>}
+      {call.notes&&<div style={{background:'#fff',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px',fontSize:'12px',color:'#0f172a',whiteSpace:'pre-wrap',margin:'10px 0 0',lineHeight:1.5}}>{call.notes}</div>}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',marginTop:'12px'}}>
+        <Field label="Outcome">
+          <select style={INP} value={status} onChange={e=>setStatus(e.target.value)}>
+            <option value="to_call">To call</option>
+            <option value="callback">Call back later</option>
+            <option value="no_answer">No answer</option>
+            <option value="not_interested">Not interested</option>
+          </select>
+        </Field>
+        {status==='callback'&&<Field label="Call back on"><input style={INP} type="date" value={cbDate} onChange={e=>setCbDate(e.target.value)}/></Field>}
+      </div>
+      <Field label="Add a note"><textarea style={{...INP,minHeight:'58px',resize:'vertical'}} placeholder="What happened on the call?" value={note} onChange={e=>setNote(e.target.value)}/></Field>
+      <div style={{display:'flex',gap:'8px'}}>
+        <button style={BTN(false)} onClick={save}>Save update</button>
+        <button style={BTN(true)} onClick={()=>onGoRecord(call.id)}><Video size={13}/>Record verification call</button>
+      </div>
+    </div>
+  );
+}
+
+function CallerHome({ myCalls, onUpdateCall, onGoRecord }) {
+  const order={callback:0,to_call:1,no_answer:2,recorded:3,not_interested:4};
+  const sorted=[...myCalls].sort((a,b)=>((order[a.status]??9)-(order[b.status]??9))||((a.callbackDate||'').localeCompare(b.callbackDate||'')));
+  const counts={
+    to_call: myCalls.filter(c=>c.status==='to_call').length,
+    callback: myCalls.filter(c=>c.status==='callback').length,
+    recorded: myCalls.filter(c=>c.status==='recorded').length,
+  };
+  const [openId,setOpenId]=useState('');
+  return (
+    <div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px',marginBottom:'16px'}}>
+        <Metric label="To call" value={counts.to_call}/>
+        <Metric label="Callbacks" value={counts.callback} color="#185FA5"/>
+        <Metric label="Recorded" value={counts.recorded} color="#0F6E56"/>
+      </div>
+      <div style={CARD}>
+        <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Your merchants to call</span></div>
+        {sorted.length===0?(
+          <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Nothing assigned yet. When your admin assigns merchants for you to call, they’ll show up here.</div>
+        ):sorted.map(c=>{
+          const st=CALL_STATUS[c.status]||CALL_STATUS.to_call;
+          const isOpen=openId===c.id;
+          return (
+            <div key={c.id} style={{borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+              <div onClick={()=>setOpenId(isOpen?'':c.id)} style={{display:'grid',gridTemplateColumns:'1fr auto',gap:'12px',alignItems:'center',padding:'13px 18px',cursor:'pointer'}}>
+                <div>
+                  <div style={{fontWeight:'500',fontSize:'14px'}}>{c.business}</div>
+                  <div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>{[c.contact,c.phone,c.location].filter(Boolean).join(' · ')||'No contact details'}</div>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                  {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:'#185FA5',fontWeight:'500'}}>{fmtDate(c.callbackDate)}</span>}
+                  {c.status==='recorded'&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
+                  <Badge color={st.color}>{st.label}</Badge>
+                </div>
+              </div>
+              {isOpen&&<CallEditor call={c} onUpdateCall={onUpdateCall} onGoRecord={onGoRecord}/>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Payouts (same content the portal showed before) ──
+function CallerPayouts({ emp, deals, assignments }) {
+  const payments = getPayments(emp.id,deals,assignments);
+  const total   = payments.reduce((s,p)=>s+p.amount,0);
+  const pending = payments.filter(p=>!p.paid).reduce((s,p)=>s+p.amount,0);
+  const paid    = payments.filter(p=>p.paid).reduce((s,p)=>s+p.amount,0);
+  const myDeals = deals.filter(d=>d.setter?.employeeId===emp.id||d.closer?.employeeId===emp.id);
+  const myPeriods = (assignments.find(a=>a.employeeId===emp.id)?.periods)||[];
+  return (
+    <div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px',marginBottom:'18px'}}>
+        <Metric label="Total earned" value={fmt$(total)}/>
+        <Metric label="Already paid" value={fmt$(paid)} color="#0F6E56"/>
+        <Metric label="Pending" value={fmt$(pending)} color="#854F0B"/>
+      </div>
+      {myDeals.length>0&&(
+        <div style={{...CARD,marginBottom:'14px'}}>
+          <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Your deals</span></div>
+          {myDeals.map(d=>{
+            const role=d.setter?.employeeId===emp.id?'setter':'closer';
+            const rate=d[role].ratePerCard;
+            const activated=d.monthlyActivations.reduce((a,b)=>a+b,0);
+            const pct=d.cardsOrdered>0?activated/d.cardsOrdered:0;
+            const upfront=0.25*d.cardsOrdered*rate, backend=0.75*activated*rate;
+            return (
+              <div key={d.id} style={{padding:'14px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'10px'}}>
+                  <div><div style={{fontWeight:'500',fontSize:'14px'}}>{d.orgName}</div><div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>{role==='setter'?'Appointment setter':'Closer'} · {fmt$(rate)}/card · starts {fmtYM(d.startMonth)}</div></div>
+                  <Badge color={role==='setter'?'amber':'blue'}>{role==='setter'?'Setter':'Closer'}</Badge>
+                </div>
+                <div style={{marginBottom:'10px'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',fontSize:'11px',color:'#64748b',marginBottom:'4px'}}><span>Cards activated</span><span style={{fontFamily:'var(--font-mono)'}}>{activated} / {d.cardsOrdered}</span></div>
+                  <div style={{height:'4px',background:'var(--color-border-tertiary)',borderRadius:'2px'}}><div style={{width:`${Math.min(100,pct*100)}%`,height:'100%',background:'#1D9E75',borderRadius:'2px'}}/></div>
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
+                  <div style={{background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px'}}><div style={{fontSize:'11px',color:'#64748b',marginBottom:'3px'}}>Upfront (25%)</div><div style={{fontFamily:'var(--font-mono)',fontWeight:'500',color:'#854F0B'}}>{fmt$(upfront)}</div></div>
+                  <div style={{background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px'}}><div style={{fontSize:'11px',color:'#64748b',marginBottom:'3px'}}>Backend (75%)</div><div style={{fontFamily:'var(--font-mono)',fontWeight:'500',color:'#0F6E56'}}>{fmt$(backend)}</div></div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {myPeriods.length>0&&(
+        <div style={{...CARD,marginBottom:'14px'}}>
+          <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Your merchant discount periods</span></div>
+          {myPeriods.map(p=>(
+            <div key={p.id} style={{padding:'14px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:p.entries?.length?'10px':'0'}}>
+                <div><div style={{fontSize:'13px',fontWeight:'500'}}>{fmtDate(p.startDate)} → {fmtDate(p.endDate)}</div><div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>{p.discounts} deal{p.discounts!==1?'s':''} · {fmt$(periodAmt(p))}</div></div>
+                <div style={{display:'flex',gap:'8px',alignItems:'center'}}>{p.source==='csv'&&<Badge color="blue">CSV</Badge>}<Badge color={p.paid?'teal':'amber'}>{p.paid?'✓ Paid':'⏳ Pending'}</Badge></div>
+              </div>
+              {p.entries?.length>0&&(
+                <div style={{display:'flex',flexWrap:'wrap',gap:'5px',marginTop:'8px'}}>
+                  {p.entries.filter(e=>e.tier!=='Redacted').map((e,i)=>(
+                    <span key={i} style={{fontSize:'11px',padding:'3px 8px',background:'var(--color-background-secondary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',color:'var(--color-text-primary)'}}>{e.business} <span style={{color:'#0F6E56',fontFamily:'var(--font-mono)',fontWeight:'500'}}>{e.tier}</span></span>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={CARD}>
+        <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Payment history</span></div>
+        {payments.length===0?(
+          <div style={{padding:'40px',textAlign:'center',color:'var(--color-text-secondary)',fontSize:'13px'}}>No payments yet. Check back once deals are active.</div>
+        ):payments.map(p=>(
+          <div key={p.id} style={{display:'grid',gridTemplateColumns:'auto 1fr auto auto',gap:'14px',alignItems:'center',padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+            <div style={{fontSize:'12px',color:'var(--color-text-secondary)',whiteSpace:'nowrap'}}>{fmtDate(p.date)}</div>
+            <div><div style={{fontSize:'13px',marginBottom:'3px'}}>{p.desc}</div><Badge color={p.type==='upfront'?'amber':p.type==='backend'?'teal':'blue'}>{p.type==='upfront'?'Deal upfront':p.type==='backend'?'Deal backend':'Merchant'}</Badge></div>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:'15px',fontWeight:'500',color:'#0F6E56',whiteSpace:'nowrap'}}>{fmt$(p.amount)}</div>
+            <Badge color={p.paid?'teal':'amber'}>{p.paid?'✓ Paid':'⏳ Pending'}</Badge>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Admin: assign calls + verify recordings ──
+function VerifyRow({ call, callerName, onVerify }) {
+  const [url,setUrl]=useState(''); const [loading,setLoading]=useState(false); const [err,setErr]=useState('');
+  const load=async()=>{
+    setLoading(true); setErr('');
+    try{ const {data,error}=await supabase.storage.from(CALL_BUCKET).createSignedUrl(call.recordingPath,3600); if(error) throw error; setUrl(data.signedUrl); }
+    catch(e){ setErr('Could not load recording: '+(e.message||e)); }
+    finally{ setLoading(false); }
+  };
+  const isVideo = call.mediaMode!=='audio';
+  return (
+    <div style={{padding:'14px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+      <div style={{marginBottom:'10px'}}>
+        <div style={{fontWeight:'500',fontSize:'14px'}}>{call.business}</div>
+        <div style={{fontSize:'12px',color:'#64748b'}}>{callerName}{[call.discount,call.location].filter(Boolean).length?' · '+[call.discount,call.location].filter(Boolean).join(' · '):''}{call.durationSec?' · '+mmss(call.durationSec):''}</div>
+      </div>
+      {!url&&<button style={BTN(false)} onClick={load} disabled={loading}><Play size={13}/>{loading?'Loading…':'Play recording'}</button>}
+      {err&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'8px'}}>{err}</div>}
+      {url&&(isVideo
+        ? <video src={url} controls style={{width:'100%',maxWidth:'420px',borderRadius:'var(--border-radius-md)',margin:'0 0 10px',display:'block'}}/>
+        : <audio src={url} controls style={{width:'100%',margin:'0 0 10px'}}/>)}
+      <div style={{display:'flex',gap:'8px',marginTop:'6px'}}>
+        <button style={BTN(true)} onClick={()=>onVerify(call.id,'approved')}><CheckCircle size={13}/>Approve</button>
+        <button style={{...BTN(false),color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}} onClick={()=>onVerify(call.id,'rejected')}>Reject / redo</button>
+      </div>
+    </div>
+  );
+}
+
+function AdminCallsView({ employees, calls, onVerify, onDelete }) {
+  const pending=calls.filter(c=>c.status==='recorded'&&(!c.verifyStatus||c.verifyStatus==='pending'));
+  const nameOf=id=>employees.find(e=>e.id===id)?.name||'Unassigned';
+  const byCaller={};
+  calls.forEach(c=>{ (byCaller[c.callerId]=byCaller[c.callerId]||[]).push(c); });
+  return (
+    <div>
+      <div style={{marginBottom:'16px'}}>
+        <h3 style={{margin:0,fontSize:'16px',fontWeight:'500'}}>Merchant calls</h3>
+        <div style={{fontSize:'13px',color:'#64748b',marginTop:'2px'}}>Assign merchants for your callers, then verify the recordings they send back</div>
+      </div>
+      <div style={{...CARD,marginBottom:'16px'}}>
+        <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)',display:'flex',alignItems:'center',gap:'8px'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Awaiting verification</span>{pending.length>0&&<Badge color="amber">{pending.length}</Badge>}</div>
+        {pending.length===0?(
+          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>No recordings waiting. Calls your team records will show up here to review.</div>
+        ):pending.map(c=><VerifyRow key={c.id} call={c} callerName={nameOf(c.callerId)} onVerify={onVerify}/>)}
+      </div>
+      {Object.keys(byCaller).length===0?(
+        <div style={{...CARD,padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>No merchants assigned yet. Use “Assign call” up top to add one.</div>
+      ):Object.entries(byCaller).map(([cid,list])=>(
+        <div key={cid} style={{...CARD,marginBottom:'12px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'12px',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+            <div style={{width:'32px',height:'32px',borderRadius:'50%',background:'var(--color-background-info)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:'500',color:'var(--color-text-info)'}}>{initials(nameOf(cid))}</div>
+            <div style={{flex:1}}><div style={{fontWeight:'500'}}>{nameOf(cid)}</div><div style={{fontSize:'12px',color:'#64748b'}}>{list.length} merchant{list.length!==1?'s':''}</div></div>
+          </div>
+          {list.map(c=>{
+            const st=CALL_STATUS[c.status]||CALL_STATUS.to_call;
+            return (
+              <div key={c.id} style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'12px',alignItems:'center',padding:'11px 18px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+                <div><div style={{fontSize:'13px',fontWeight:'500'}}>{c.business}</div><div style={{fontSize:'11px',color:'#64748b'}}>{[c.discount,c.location].filter(Boolean).join(' · ')||'—'}</div></div>
+                <div style={{display:'flex',gap:'6px',alignItems:'center'}}>
+                  {c.status==='recorded'&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
+                  {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:'#185FA5'}}>{fmtDate(c.callbackDate)}</span>}
+                  <Badge color={st.color}>{st.label}</Badge>
+                </div>
+                <button onClick={()=>onDelete(c.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AddCallModal({ employees, onAdd, onClose }) {
+  const [callerId,setCallerId]=useState('');
+  const [business,setBusiness]=useState('');
+  const [contact,setContact]=useState('');
+  const [phone,setPhone]=useState('');
+  const [location,setLocation]=useState('');
+  const [discount,setDiscount]=useState('');
+  const [notes,setNotes]=useState('');
+  const ok=callerId&&business.trim();
+  const submit=()=>{ if(!ok) return; onAdd({callerId,business:business.trim(),contact:contact.trim(),phone:phone.trim(),location:location.trim(),discount:discount.trim(),notes:notes.trim()}); };
+  return (
+    <ModalWrap title="Assign a merchant call" onClose={onClose}>
+      <EmpPicker employees={employees} value={callerId} onChange={setCallerId} label="Assign to caller"/>
+      <Field label="Business name"><input style={INP} value={business} onChange={e=>setBusiness(e.target.value)} placeholder="e.g. Joe's Pizza" autoFocus/></Field>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+        <Field label="Contact name"><input style={INP} value={contact} onChange={e=>setContact(e.target.value)}/></Field>
+        <Field label="Phone"><input style={INP} value={phone} onChange={e=>setPhone(e.target.value)} placeholder="(555) 000-0000"/></Field>
+      </div>
+      <Field label="Location(s)"><input style={INP} value={location} onChange={e=>setLocation(e.target.value)} placeholder="e.g. Downtown & Eastside"/></Field>
+      <Field label="Discount"><select style={INP} value={discount} onChange={e=>setDiscount(e.target.value)}><option value="">Select…</option>{['$15','$30','$40','$50'].map(t=><option key={t} value={t}>{t}</option>)}</select></Field>
+      <Field label="Notes (optional)"><textarea style={{...INP,minHeight:'56px',resize:'vertical'}} value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
+      <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'6px',opacity:ok?1:0.5}} onClick={submit} disabled={!ok}>Assign call</button>
+    </ModalWrap>
+  );
+}
+
 // ─── ROOT ─────────────────────────────────────────────────────────
 export default function TailgatePayday() {
   useEffect(() => {
@@ -1057,6 +1396,7 @@ export default function TailgatePayday() {
       }
       body { margin: 0; background: #f1f5f9; }
       * { box-sizing: border-box; }
+      @keyframes tgpulse { 0%,100%{opacity:1} 50%{opacity:.25} }
     `;
     document.head.appendChild(el);
     return () => document.head.removeChild(el);
@@ -1071,6 +1411,7 @@ export default function TailgatePayday() {
   const [selectedDeal,setSelectedDeal]=useState(null);
   const [loading,setLoading]=useState(true);
   const [modal,setModal]=useState(null);
+  const [calls,setCalls]=useState([]);
 
   // Auth
   useEffect(()=>{
@@ -1082,14 +1423,29 @@ export default function TailgatePayday() {
   // Data load
   useEffect(()=>{
     if(!session) return;
-    Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn')]).then(([e,d,a])=>{
-      setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setLoading(false);
+    Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn'),loadS('po_calls')]).then(([e,d,a,c])=>{
+      setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setCalls(Array.isArray(c)?c:[]); setLoading(false);
     });
   },[session]);
 
   const setE=v=>{setEmployees(v);saveS('po_emp',v);};
   const setD=v=>{setDeals(v);saveS('po_deals',v);};
   const setA=v=>{setAssignments(v);saveS('po_asgn',v);};
+  const setC=v=>{setCalls(v);saveS('po_calls',v);};
+
+  // Merchant call assignments / mini-CRM
+  const addCall=rec=>{ setC([...calls,{...rec,id:genId(),status:'to_call',createdAt:new Date().toISOString()}]); setModal(null); };
+  const updateCall=(id,patch)=>setC(calls.map(c=>c.id===id?{...c,...patch}:c));
+  const saveRecording=(id,meta)=>setC(calls.map(c=>c.id===id?{...c,...meta,status:'recorded',verifyStatus:'pending',recordedAt:new Date().toISOString()}:c));
+  const verifyCall=(id,status)=>setC(calls.map(c=>c.id===id?{...c,verifyStatus:status}:c));
+  const deleteCall=id=>setC(calls.filter(c=>c.id!==id));
+
+  const exportAll=()=>{
+    const data={exportedAt:new Date().toISOString(),employees,deals,assignments,calls};
+    const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+    const url=URL.createObjectURL(blob); const a=document.createElement('a');
+    a.href=url; a.download=`tailgate-backup-${today()}.json`; a.click(); URL.revokeObjectURL(url);
+  };
 
   const addEmployee=(name,email)=>{ setE([...employees,{id:genId(),name,email:email||'',createdAt:new Date().toISOString()}]); setModal(null); };
   const deleteEmployee=id=>setE(employees.filter(e=>e.id!==id));
@@ -1117,10 +1473,10 @@ export default function TailgatePayday() {
 
   if(authLoading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#64748b',fontSize:'14px'}}>Loading…</div>;
   if(!session) return <LoginPage/>;
-  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} userEmail={userEmail} onSignOut={signOut}/>;
+  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onSaveRecording={saveRecording}/>;
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'200px',color:'var(--color-text-secondary)',fontSize:'14px'}}>Loading…</div>;
 
-  const TABS=[['employees','Employees',Users],['deals','Deals',Building2],['reps','Merchant Reps',DollarSign],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
+  const TABS=[['employees','Employees',Users],['deals','Deals',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
 
   return (
     <div style={{padding:'20px',maxWidth:'980px',margin:'0 auto',fontFamily:'var(--font-sans)'}}>
@@ -1135,11 +1491,12 @@ export default function TailgatePayday() {
           ))}
         </div>
         <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
-          {['employees','deals','reps'].includes(tab)&&(
-            <button style={BTN(true)} onClick={()=>setModal({type:tab==='employees'?'addEmp':tab==='deals'?'addDeal':'addPeriod'})}>
-              <Plus size={14}/>{tab==='employees'?'Employee':tab==='deals'?'Deal':'Period'}
+          {['employees','deals','reps','calls'].includes(tab)&&(
+            <button style={BTN(true)} onClick={()=>setModal({type:tab==='employees'?'addEmp':tab==='deals'?'addDeal':tab==='calls'?'addCall':'addPeriod'})}>
+              <Plus size={14}/>{tab==='employees'?'Employee':tab==='deals'?'Deal':tab==='calls'?'Assign call':'Period'}
             </button>
           )}
+          <button style={{...BTN(false),padding:'7px 10px'}} onClick={exportAll} title="Export a backup"><Download size={14}/></button>
           <button style={{...BTN(false),padding:'7px 10px'}} onClick={signOut} title="Sign out"><LogOut size={14}/></button>
         </div>
       </div>
@@ -1149,12 +1506,14 @@ export default function TailgatePayday() {
       {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onImportCSV={()=>setModal({type:'importCSV'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
       {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
       {tab==='payroll'&&<PayrollView employees={employees} deals={deals} assignments={assignments}/>}
+      {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onVerify={verifyCall} onDelete={deleteCall}/>}
 
       {modal?.type==='addEmp'&&<AddEmployeeModal onAdd={addEmployee} onClose={()=>setModal(null)}/>}
       {modal?.type==='addDeal'&&<AddDealModal employees={employees} onAdd={addDeal} onClose={()=>setModal(null)}/>}
       {modal?.type==='addPeriod'&&<AddPeriodModal employees={employees} onAdd={addPeriod} onClose={()=>setModal(null)}/>}
       {modal?.type==='importCSV'&&<CSVImportModal employees={employees} assignments={assignments} onSave={updated=>{setA(updated);setModal(null);}} onClose={()=>setModal(null)}/>}
       {modal?.type==='payStub'&&<PayStubModal emp={modal.data.emp} period={modal.data.p} onClose={()=>setModal(null)}/>}
+      {modal?.type==='addCall'&&<AddCallModal employees={employees} onAdd={addCall} onClose={()=>setModal(null)}/>}
     </div>
   );
 }
