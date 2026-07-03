@@ -169,7 +169,7 @@ function LoginPage() {
     <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',background:'#f1f5f9'}}>
       <div style={{width:'100%',maxWidth:'400px'}}>
         <div style={{textAlign:'center',marginBottom:'28px'}}>
-          <div style={{display:'inline-flex',alignItems:'center',gap:'8px',marginBottom:'6px'}}><span style={{fontSize:"24px"}}>🏈</span><span style={{fontSize:'20px',fontWeight:'600',color:'#0f172a'}}>Tailgate Payday</span></div>
+          <div style={{display:'inline-flex',alignItems:'center',gap:'8px',marginBottom:'6px'}}><span style={{fontSize:'20px',fontWeight:'600',color:'#0f172a'}}>Tailgate Payday</span></div>
           <div style={{fontSize:'14px',color:'#64748b'}}>{APP_TAGLINE}</div>
         </div>
         <div style={{...CARD,padding:'28px',background:'#ffffff'}}>
@@ -235,7 +235,7 @@ function EmployeePortal({employees,deals,assignments,calls,userEmail,onSignOut,o
         </div>
 
         {screen==='home'&&<CallerHome myCalls={myCalls} onOpenLog={c=>setLogId(c.id)}/>}
-        {screen==='crm'&&<CallerCRM myCalls={myCalls} onOpenLog={c=>setLogId(c.id)}/>}
+        {screen==='crm'&&<CallerCRM myCalls={myCalls} onOpenLog={c=>setLogId(c.id)} onWorkQueue={()=>setScreen('home')}/>}
         {screen==='payouts'&&<CallerPayouts emp={emp} deals={deals} assignments={assignments}/>}
       </div>
       {logCall&&<LogCallModal call={logCall} callerName={emp.name} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake} onClose={()=>setLogId('')}/>}
@@ -1429,10 +1429,20 @@ const CRM_COLS = [
   ['no_answer',     'No answer',      'gray'],
   ['not_interested','Not interested', 'red'],
 ];
-function CallerCRM({ myCalls, onOpenLog }) {
+function CallerCRM({ myCalls, onOpenLog, onWorkQueue }) {
   const inCol=(c,key)=>key==='completed'?(c.status==='completed'||c.status==='interested'||c.status==='recorded'):c.status===key;
+  const uncontacted=myCalls.filter(c=>c.status==='to_call').length;
   return (
     <div>
+      {uncontacted>0&&(
+        <button onClick={onWorkQueue}
+          style={{width:'100%',display:'flex',alignItems:'center',justifyContent:'center',gap:'10px',padding:'16px',marginBottom:'16px',cursor:'pointer',fontFamily:'var(--font-sans)',
+            borderRadius:'var(--border-radius-lg)',border:'1.5px solid #EF9F27',background:'#FAEEDA',color:'#854F0B',fontWeight:'700',fontSize:'16px'}}>
+          <Phone size={18}/>
+          <span>{uncontacted} {uncontacted===1?'person needs':'people need'} to be contacted</span>
+          <ChevronRight size={18}/>
+        </button>
+      )}
       <div style={{fontSize:'13px',color:'#64748b',marginBottom:'14px'}}>Everyone you’ve logged, grouped by where they stand. Click a card to update it.</div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(5,minmax(200px,1fr))',gap:'12px',overflowX:'auto',paddingBottom:'6px'}}>
         {CRM_COLS.map(([key,label,color])=>{
@@ -1919,7 +1929,7 @@ export default function TailgatePayday() {
     <div style={{padding:'20px',maxWidth:'980px',margin:'0 auto',fontFamily:'var(--font-sans)'}}>
       <h2 className="sr-only">Tailgate Payday — Payout management</h2>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'22px'}}>
-        <div style={{display:'flex',alignItems:'center',gap:'9px'}}><span style={{fontSize:"20px"}}>🏈</span><span style={{fontSize:'17px',fontWeight:'500'}}>Tailgate Payday</span></div>
+        <div style={{display:'flex',alignItems:'center',gap:'9px'}}><span style={{fontSize:'17px',fontWeight:'500'}}>Tailgate Payday</span></div>
         <div style={{display:'flex',background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'3px',border:'0.5px solid var(--color-border-tertiary)',gap:'2px'}}>
           {TABS.map(([key,label,Icon])=>(
             <button key={key} onClick={()=>{setTab(key);setSelectedDeal(null);}} style={{display:'inline-flex',alignItems:'center',gap:'5px',padding:'6px 13px',borderRadius:'var(--border-radius-md)',border:'none',cursor:'pointer',fontSize:'13px',fontFamily:'var(--font-sans)',fontWeight:'500',background:tab===key?'var(--color-background-primary)':'transparent',color:tab===key?'var(--color-text-primary)':'var(--color-text-secondary)',boxShadow:tab===key?'0 0.5px 2px rgba(0,0,0,0.1)':'none'}}>
