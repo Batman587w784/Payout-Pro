@@ -154,16 +154,22 @@ function LoginPage() {
 
   const submit = async () => {
     setError(''); setSuccess(''); setLoading(true);
-    if (mode==='signin') {
+    if (mode==='reset') {
+      const {error} = await supabase.auth.resetPasswordForEmail(email, {redirectTo: window.location.origin});
+      if (error) setError(error.message);
+      else setSuccess('If that email has an account, a password reset link is on its way — check your inbox (and spam).');
+    } else if (mode==='signin') {
       const {error} = await supabase.auth.signInWithPassword({email,password});
       if (error) setError(error.message);
     } else {
       const {error} = await supabase.auth.signUp({email,password});
       if (error) setError(error.message);
-      else setSuccess('Account created! You can now sign in.');
+      else setSuccess('Account created! If the app doesn’t open yet, your admin still needs to add you — they’ll see your request and set you up.');
     }
     setLoading(false);
   };
+  const swap = m => { setMode(m); setError(''); setSuccess(''); };
+  const btnLabel = mode==='reset'?'Send reset link':mode==='signin'?'Sign in':'Create account';
 
   return (
     <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',background:'#f1f5f9'}}>
@@ -173,20 +179,29 @@ function LoginPage() {
           <div style={{fontSize:'14px',color:'#64748b'}}>{APP_TAGLINE}</div>
         </div>
         <div style={{...CARD,padding:'28px',background:'#ffffff'}}>
-          <div style={{display:'flex',gap:'4px',marginBottom:'20px',background:'#f8fafc',borderRadius:'var(--border-radius-md)',padding:'3px'}}>
-            {['signin','signup'].map(m=>(
-              <button key={m} onClick={()=>{setMode(m);setError('');setSuccess('');}} style={{flex:1,padding:'8px',border:'none',borderRadius:'var(--border-radius-md)',cursor:'pointer',fontSize:'13px',fontWeight:'500',fontFamily:'var(--font-sans)',background:mode===m?'#ffffff':'transparent',color:mode===m?'#0f172a':'#64748b',boxShadow:mode===m?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>
-                {m==='signin'?'Sign in':'Create account'}
-              </button>
-            ))}
-          </div>
+          {mode==='reset'?(
+            <div style={{marginBottom:'18px'}}>
+              <div style={{fontSize:'16px',fontWeight:'600',color:'#0f172a'}}>Reset your password</div>
+              <div style={{fontSize:'13px',color:'#64748b',marginTop:'4px'}}>Enter your email and we’ll send you a link to set a new password.</div>
+            </div>
+          ):(
+            <div style={{display:'flex',gap:'4px',marginBottom:'20px',background:'#f8fafc',borderRadius:'var(--border-radius-md)',padding:'3px'}}>
+              {['signin','signup'].map(m=>(
+                <button key={m} onClick={()=>swap(m)} style={{flex:1,padding:'8px',border:'none',borderRadius:'var(--border-radius-md)',cursor:'pointer',fontSize:'13px',fontWeight:'500',fontFamily:'var(--font-sans)',background:mode===m?'#ffffff':'transparent',color:mode===m?'#0f172a':'#64748b',boxShadow:mode===m?'0 1px 3px rgba(0,0,0,0.1)':'none'}}>
+                  {m==='signin'?'Sign in':'Create account'}
+                </button>
+              ))}
+            </div>
+          )}
           <Field label="Email"><input style={INP} type="email" placeholder="you@example.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()} autoFocus/></Field>
-          <Field label="Password"><input style={INP} type="password" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}/></Field>
+          {mode!=='reset'&&<Field label="Password"><input style={INP} type="password" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}/></Field>}
+          {mode==='signin'&&<div style={{textAlign:'right',marginTop:'-6px',marginBottom:'12px'}}><button onClick={()=>swap('reset')} style={{background:'none',border:'none',padding:0,cursor:'pointer',fontSize:'12px',color:'#185FA5',fontFamily:'var(--font-sans)'}}>Forgot your password?</button></div>}
           {error&&<div style={{background:'#FCEBEB',border:'0.5px solid #F09595',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#A32D2D',marginBottom:'14px'}}>{error}</div>}
           {success&&<div style={{background:'#E1F5EE',border:'0.5px solid #5DCAA5',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#0F6E56',marginBottom:'14px'}}>{success}</div>}
           <button style={{...BTN(true),width:'100%',justifyContent:'center',padding:'10px',fontSize:'14px',opacity:loading?0.7:1}} onClick={submit} disabled={loading}>
-            {loading?'Please wait…':mode==='signin'?'Sign in':'Create account'}
+            {loading?'Please wait…':btnLabel}
           </button>
+          {mode==='reset'&&<div style={{textAlign:'center',marginTop:'12px'}}><button onClick={()=>swap('signin')} style={{background:'none',border:'none',padding:0,cursor:'pointer',fontSize:'12px',color:'#64748b',fontFamily:'var(--font-sans)'}}>← Back to sign in</button></div>}
           {mode==='signup'&&<div style={{fontSize:'12px',color:'#64748b',textAlign:'center',marginTop:'12px'}}>Your admin needs to add your email to the employee roster before you can see your payouts.</div>}
         </div>
       </div>
@@ -194,17 +209,55 @@ function LoginPage() {
   );
 }
 
+// ─── SET-NEW-PASSWORD (after a reset link) ────────────────────────
+function ResetPasswordPage({ onDone, onCancel }) {
+  const [password,setPassword]=useState('');
+  const [confirm,setConfirm]=useState('');
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState('');
+  const submit=async()=>{
+    setError('');
+    if(password.length<6){ setError('Password must be at least 6 characters.'); return; }
+    if(password!==confirm){ setError('Those passwords don’t match.'); return; }
+    setLoading(true);
+    const {error}=await supabase.auth.updateUser({password});
+    setLoading(false);
+    if(error) setError(error.message); else onDone();
+  };
+  return (
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',background:'#f1f5f9'}}>
+      <div style={{width:'100%',maxWidth:'400px'}}>
+        <div style={{textAlign:'center',marginBottom:'28px'}}>
+          <div style={{fontSize:'20px',fontWeight:'600',color:'#0f172a'}}>Tailgate Payday</div>
+          <div style={{fontSize:'14px',color:'#64748b',marginTop:'4px'}}>Choose a new password</div>
+        </div>
+        <div style={{...CARD,padding:'28px',background:'#ffffff'}}>
+          <Field label="New password"><input style={INP} type="password" placeholder="••••••••" value={password} onChange={e=>setPassword(e.target.value)} autoFocus/></Field>
+          <Field label="Confirm new password"><input style={INP} type="password" placeholder="••••••••" value={confirm} onChange={e=>setConfirm(e.target.value)} onKeyDown={e=>e.key==='Enter'&&submit()}/></Field>
+          {error&&<div style={{background:'#FCEBEB',border:'0.5px solid #F09595',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#A32D2D',marginBottom:'14px'}}>{error}</div>}
+          <button style={{...BTN(true),width:'100%',justifyContent:'center',padding:'10px',fontSize:'14px',opacity:loading?0.7:1}} onClick={submit} disabled={loading}>{loading?'Saving…':'Set new password'}</button>
+          <div style={{textAlign:'center',marginTop:'12px'}}><button onClick={onCancel} style={{background:'none',border:'none',padding:0,cursor:'pointer',fontSize:'12px',color:'#64748b',fontFamily:'var(--font-sans)'}}>Cancel</button></div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── EMPLOYEE / CALLER PORTAL ─────────────────────────────────────
-function EmployeePortal({employees,deals,assignments,calls,userEmail,onSignOut,onUpdateCall,onAddRecordingTake}) {
+function EmployeePortal({employees,deals,assignments,calls,userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess}) {
   const [screen,setScreen]=useState('home');
   const [logId,setLogId]=useState('');
   const emp = employees.find(e=>e.email?.toLowerCase()===userEmail?.toLowerCase());
+  const requested = useRef(false);
+  useEffect(()=>{ // once: if a signed-in user isn't on the roster, flag it for the admin
+    if(!emp && userEmail && onRequestAccess && !requested.current){ requested.current=true; onRequestAccess(userEmail); }
+  });
   if (!emp) return (
     <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',background:'#f1f5f9'}}>
       <div style={{...CARD,padding:'32px',textAlign:'center',maxWidth:'420px',background:'#ffffff'}}>
         <Shield size={32} style={{margin:'0 auto 12px',display:'block',color:'#64748b'}}/>
-        <div style={{fontWeight:'500',marginBottom:'8px'}}>Account not linked</div>
-        <div style={{fontSize:'13px',color:'#64748b',marginBottom:'20px'}}>Your email ({userEmail}) hasn't been added to the roster yet. Contact your admin at shuffman@tailgateofficial.com.</div>
+        <div style={{fontWeight:'500',marginBottom:'8px'}}>Almost there</div>
+        <div style={{fontSize:'13px',color:'#64748b',marginBottom:'20px'}}>Your email ({userEmail}) isn't on the roster yet. Your admin has been notified of your request and will add you shortly. You can also reach them at shuffman@tailgateofficial.com.</div>
         <button style={BTN(false)} onClick={onSignOut}><LogOut size={13}/>Sign out</button>
       </div>
     </div>
@@ -445,7 +498,7 @@ function PaymentQueue({employees,deals,assignments,onMarkDealPaid,onMarkPeriodPa
 }
 
 // ─── EMPLOYEES ────────────────────────────────────────────────────
-function EmployeesView({employees,deals,assignments,onAdd,onDelete}) {
+function EmployeesView({employees,deals,assignments,signups=[],onAdd,onAddRequest,onDismissRequest,onDelete}) {
   const stats = emp => {
     const p=getPayments(emp.id,deals,assignments);
     return {
@@ -455,12 +508,29 @@ function EmployeesView({employees,deals,assignments,onAdd,onDelete}) {
       periods:assignments.find(a=>a.employeeId===emp.id)?.periods.length||0
     };
   };
+  const pendingReq=signups.filter(s=>!employees.some(e=>e.email?.toLowerCase()===s.email.toLowerCase()));
   return (
     <div>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'18px'}}>
         <div><h3 style={{margin:0,fontSize:'16px',fontWeight:'500'}}>Employee roster</h3><div style={{fontSize:'13px',color:'var(--color-text-secondary)',marginTop:'2px'}}>All employees — assign them to deals and merchant roles</div></div>
         <button style={BTN(true)} onClick={onAdd}><Plus size={14}/>Add employee</button>
       </div>
+      {pendingReq.length>0&&(
+        <div style={{...CARD,marginBottom:'16px',border:'1px solid #EF9F27'}}>
+          <div style={{padding:'12px 16px',borderBottom:'0.5px solid var(--color-border-tertiary)',display:'flex',alignItems:'center',gap:'8px',background:'#FAEEDA'}}>
+            <span style={{fontWeight:'600',fontSize:'14px',color:'#854F0B'}}>Access requests</span>
+            <Badge color="amber">{pendingReq.length}</Badge>
+            <span style={{fontSize:'12px',color:'#854F0B'}}>— people who created an account but aren’t on the roster yet</span>
+          </div>
+          {pendingReq.map(s=>(
+            <div key={s.email} style={{display:'flex',alignItems:'center',gap:'12px',padding:'11px 16px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+              <div style={{flex:1,minWidth:0}}><div style={{fontSize:'13px',fontWeight:'500'}}>{s.email}</div><div style={{fontSize:'11px',color:'var(--color-text-secondary)'}}>Requested {fmtDate((s.requestedAt||'').split('T')[0])}</div></div>
+              <button style={{...BTN(true),padding:'5px 12px',fontSize:'12px'}} onClick={()=>onAddRequest(s.email)}><Plus size={12}/>Add to roster</button>
+              <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px'}} onClick={()=>onDismissRequest(s.email)}>Dismiss</button>
+            </div>
+          ))}
+        </div>
+      )}
       {employees.length===0?(
         <div style={{...CARD,padding:'48px',textAlign:'center',color:'var(--color-text-secondary)'}}>
           <Users size={32} style={{margin:'0 auto 12px',display:'block',opacity:0.4}}/>
@@ -498,9 +568,9 @@ function EmployeesView({employees,deals,assignments,onAdd,onDelete}) {
 }
 
 // Updated to include email field
-function AddEmployeeModal({onAdd,onClose}) {
+function AddEmployeeModal({onAdd,onClose,initialEmail}) {
   const [name,setName]=useState('');
-  const [email,setEmail]=useState('');
+  const [email,setEmail]=useState(initialEmail||'');
   return (
     <ModalWrap title="Add employee" onClose={onClose}>
       <Field label="Full name"><input style={INP} placeholder="e.g. Sarah Johnson" value={name} onChange={e=>setName(e.target.value)} autoFocus/></Field>
@@ -1133,7 +1203,7 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
   const [businessName,setBusinessName]=useState(call.business||'');
   const [businessType,setBusinessType]=useState(call.businessType||call.category||'');
   const [addresses,setAddresses]=useState(call.addresses?.length?call.addresses:[{street:call.location||'',city:'',state:''}]);
-  const [offerDetails,setOfferDetails]=useState(call.offerDetails||call.discount||'');
+  const [offerDetails,setOfferDetails]=useState(call.offerDetails||'');
   const [cbDate,setCbDate]=useState(call.callbackDate||addDays(today(),2));
   const [cbTime,setCbTime]=useState(call.callbackTime||'');
   const [note,setNote]=useState('');
@@ -1161,7 +1231,6 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
     ['Phone', call.phone],
     ['Email', call.email],
     ['Category', call.businessType||call.category],
-    ['Discount', call.discount||call.offerDetails],
     ['More', call.additionalInfo],
   ].filter(([,v])=>v);
 
@@ -1224,7 +1293,10 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
       <div style={{...CARD,background:'var(--color-background-secondary)',padding:'16px',marginBottom:'16px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'16px'}}>
           <div style={{minWidth:0}}>
-            <div style={{fontSize:'20px',fontWeight:'600',color:'#0f172a'}}>{call.business||'Unknown business'}</div>
+            <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
+              <span style={{fontSize:'20px',fontWeight:'600',color:'#0f172a'}}>{call.business||'Unknown business'}</span>
+              {call.discount&&<Badge color="teal">{call.discount} tier</Badge>}
+            </div>
             {leadAddress&&<div style={{display:'flex',alignItems:'center',gap:'5px',fontSize:'13px',color:'#64748b',marginTop:'4px'}}><MapPin size={13} style={{flexShrink:0}}/><span>{leadAddress}</span></div>}
           </div>
           {leadSchool&&(
@@ -1610,67 +1682,130 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
   );
 }
 
+const Bar = ({pct,color='#1D9E75'}) => <div style={{height:'6px',background:'var(--color-border-tertiary)',borderRadius:'3px',overflow:'hidden'}}><div style={{width:`${Math.min(100,pct)}%`,height:'100%',background:color,borderRadius:'3px'}}/></div>;
+const leadContacted = c => c.status!=='to_call';
+const leadDone = c => c.status==='completed'||c.status==='interested'||c.status==='recorded';
+const leadState = c => { const s=(c.addresses?.[0]?.state||'').trim(); if(s) return s; const l=(c.location||'').trim(); if(l.includes(',')) return l.split(',').pop().trim(); return 'Unknown'; };
+const leadCity  = c => { const ci=(c.addresses?.[0]?.city||'').trim(); if(ci) return ci; const l=(c.location||'').trim(); if(l.includes(',')) return l.split(',')[0].trim(); return l||'—'; };
+
 function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImport, onMarkTouch }) {
+  const [areaCaller,setAreaCaller]=useState('all');
+  const [openState,setOpenState]=useState('');
   const pending=calls.filter(c=>(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&(c.submittedTake!=null||c.recordingPath)&&(!c.verifyStatus||c.verifyStatus==='pending'));
   const followUps=calls.filter(c=>c.status==='send_info');
   const nameOf=id=>employees.find(e=>e.id===id)?.name||'Unassigned';
-  const byCaller={};
-  calls.forEach(c=>{ (byCaller[c.callerId]=byCaller[c.callerId]||[]).push(c); });
+
+  const callerIds=[...new Set(calls.map(c=>c.callerId))];
+  const callerStats=callerIds.map(cid=>{ const list=calls.filter(c=>c.callerId===cid);
+    return {cid, name:nameOf(cid), total:list.length, called:list.filter(leadContacted).length, done:list.filter(leadDone).length};
+  }).sort((a,b)=>b.total-a.total);
+
+  const areaCalls=areaCaller==='all'?calls:calls.filter(c=>c.callerId===areaCaller);
+  const stateMap={};
+  areaCalls.forEach(c=>{ const k=leadState(c); (stateMap[k]=stateMap[k]||[]).push(c); });
+  const areas=Object.entries(stateMap).map(([state,list])=>({state,total:list.length,called:list.filter(leadContacted).length,list})).sort((a,b)=>b.total-a.total);
+
   return (
     <div>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px',gap:'10px'}}>
         <div>
           <h3 style={{margin:0,fontSize:'16px',fontWeight:'500'}}>Merchant calls</h3>
-          <div style={{fontSize:'13px',color:'#64748b',marginTop:'2px'}}>Import a lead list, assign callers, verify recordings, and approve straight into payouts</div>
+          <div style={{fontSize:'13px',color:'#64748b',marginTop:'2px'}}>Track who’s calling where, verify recordings, and approve straight into payouts</div>
         </div>
         <button style={BTN(false)} onClick={onImport}><Upload size={14}/>Import leads</button>
       </div>
+
+      {/* Awaiting verification — the payout action */}
       <div style={{...CARD,marginBottom:'16px'}}>
         <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)',display:'flex',alignItems:'center',gap:'8px'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Awaiting verification</span>{pending.length>0&&<Badge color="amber">{pending.length}</Badge>}</div>
         {pending.length===0?(
-          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>No recordings waiting. Confirmed calls your team records show up here to review and pay.</div>
+          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>No recordings waiting. Completed calls your team records show up here to review and pay.</div>
         ):pending.map(c=><VerifyRow key={c.id} call={c} callerName={nameOf(c.callerId)} onApprove={onApprove} onReject={onReject}/>)}
       </div>
+
       {followUps.length>0&&(
         <div style={{...CARD,marginBottom:'16px'}}>
-          <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)',display:'flex',alignItems:'center',gap:'8px'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Follow-up track (“send me info”)</span><Badge color="blue">{followUps.length}</Badge></div>
+          <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)',display:'flex',alignItems:'center',gap:'8px'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Follow-up track</span><Badge color="blue">{followUps.length}</Badge></div>
           {followUps.map(c=>{
             const done=c.followUp?.touchesDone||0; const complete=done>=FOLLOWUP_TOUCHES;
             return (
               <div key={c.id} style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'12px',alignItems:'center',padding:'11px 18px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
-                <div><div style={{fontSize:'13px',fontWeight:'500'}}>{c.business}</div><div style={{fontSize:'11px',color:'#64748b'}}>{nameOf(c.callerId)}{[c.email,c.phone].filter(Boolean).length?' · '+[c.email,c.phone].filter(Boolean).join(' · '):''}</div></div>
-                <div style={{fontSize:'11px',color:'#64748b',textAlign:'right'}}>{done}/{FOLLOWUP_TOUCHES} sent{!complete&&c.followUp?.nextDue?<><br/>next {fmtDate(c.followUp.nextDue)}</>:''}</div>
+                <div><div style={{fontSize:'13px',fontWeight:'500'}}>{c.business}</div><div style={{fontSize:'11px',color:'#64748b'}}>{nameOf(c.callerId)}</div></div>
+                <div style={{fontSize:'11px',color:'#64748b',textAlign:'right'}}>{done}/{FOLLOWUP_TOUCHES} sent</div>
                 {complete?<Badge color="teal">Done</Badge>:<button style={{...BTN(false),padding:'5px 10px',fontSize:'12px'}} onClick={()=>onMarkTouch(c.id)}>Mark touch sent</button>}
               </div>
             );
           })}
         </div>
       )}
-      {Object.keys(byCaller).length===0?(
-        <div style={{...CARD,padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>No merchants yet. Use “Import leads” or “Assign call” to add some.</div>
-      ):Object.entries(byCaller).map(([cid,list])=>(
-        <div key={cid} style={{...CARD,marginBottom:'12px'}}>
-          <div style={{display:'flex',alignItems:'center',gap:'12px',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-            <div style={{width:'32px',height:'32px',borderRadius:'50%',background:'var(--color-background-info)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:'500',color:'var(--color-text-info)'}}>{initials(nameOf(cid))}</div>
-            <div style={{flex:1}}><div style={{fontWeight:'500'}}>{nameOf(cid)}</div><div style={{fontSize:'12px',color:'#64748b'}}>{list.length} merchant{list.length!==1?'s':''}</div></div>
-          </div>
-          {list.map(c=>{
-            const st=CALL_STATUS[c.status]||CALL_STATUS.to_call;
+
+      {/* Per-caller progress */}
+      {callerStats.length>0&&(
+        <div style={{...CARD,marginBottom:'16px'}}>
+          <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Caller progress</span></div>
+          {callerStats.map(s=>{
+            const pct=s.total?Math.round(s.called/s.total*100):0;
             return (
-              <div key={c.id} style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'12px',alignItems:'center',padding:'11px 18px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
-                <div><div style={{fontSize:'13px',fontWeight:'500'}}>{c.business}</div><div style={{fontSize:'11px',color:'#64748b'}}>{[c.offerDetails||c.discount,c.location].filter(Boolean).join(' · ')||'—'}</div></div>
-                <div style={{display:'flex',gap:'6px',alignItems:'center'}}>
-                  {c.payout?.amount!=null&&<Badge color="teal">{fmt$(c.payout.amount)} paid out</Badge>}
-                  {(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
-                  {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:'#185FA5'}}>{fmtDateTime(c.callbackDate,c.callbackTime)}</span>}
-                  <Badge color={st.color}>{st.label}</Badge>
+              <div key={s.cid} style={{padding:'13px 18px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+                <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'8px'}}>
+                  <div style={{width:'32px',height:'32px',borderRadius:'50%',background:'var(--color-background-info)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:'500',color:'var(--color-text-info)',flexShrink:0}}>{initials(s.name)}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:'500',fontSize:'14px'}}>{s.name}</div>
+                    <div style={{fontSize:'12px',color:'#64748b'}}>{s.called} of {s.total} called · {s.done} completed · {s.total-s.called} left</div>
+                  </div>
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:'15px',fontWeight:'500',color:'#0F6E56'}}>{pct}%</div>
                 </div>
-                <button onClick={()=>onDelete(c.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
+                <Bar pct={pct}/>
               </div>
             );
           })}
         </div>
-      ))}
+      )}
+
+      {/* By area */}
+      <div style={CARD}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+          <span style={{fontWeight:'500',fontSize:'14px'}}>By area</span>
+          <select style={{...INP,width:'auto',padding:'6px 9px',fontSize:'12px'}} value={areaCaller} onChange={e=>setAreaCaller(e.target.value)}>
+            <option value="all">All callers</option>
+            {callerStats.map(s=><option key={s.cid} value={s.cid}>{s.name}</option>)}
+          </select>
+        </div>
+        {areas.length===0?(
+          <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>No leads yet. Use “Import leads” or “Assign call” to add some.</div>
+        ):areas.map(a=>{
+          const pct=a.total?Math.round(a.called/a.total*100):0; const open=openState===a.state;
+          return (
+            <div key={a.state} style={{borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+              <div onClick={()=>setOpenState(open?'':a.state)} style={{padding:'12px 18px',cursor:'pointer'}}>
+                <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'8px'}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:'500',fontSize:'14px'}}>{a.state}</div>
+                    <div style={{fontSize:'12px',color:'#64748b'}}>{a.called} of {a.total} called · {a.total-a.called} left</div>
+                  </div>
+                  <div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:pct>=50?'#0F6E56':'#854F0B'}}>{pct}%</div>
+                  {open?<ChevronUp size={15} color="var(--color-text-secondary)"/>:<ChevronDown size={15} color="var(--color-text-secondary)"/>}
+                </div>
+                <Bar pct={pct} color={pct>=50?'#1D9E75':'#EF9F27'}/>
+              </div>
+              {open&&[...a.list].sort((x,y)=>leadCity(x).localeCompare(leadCity(y))||(x.business||'').localeCompare(y.business||'')).map(c=>{
+                const st=CALL_STATUS[c.status]||CALL_STATUS.to_call;
+                return (
+                  <div key={c.id} style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'12px',alignItems:'center',padding:'10px 18px 10px 30px',borderTop:'0.5px solid var(--color-border-tertiary)',background:'var(--color-background-secondary)'}}>
+                    <div style={{minWidth:0}}><div style={{fontSize:'13px',fontWeight:'500'}}>{c.business}</div><div style={{fontSize:'11px',color:'#64748b'}}>{[leadCity(c),areaCaller==='all'?nameOf(c.callerId):null].filter(Boolean).join(' · ')}</div></div>
+                    <div style={{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap',justifyContent:'flex-end'}}>
+                      {c.payout?.amount!=null&&<Badge color="teal">{fmt$(c.payout.amount)} paid</Badge>}
+                      {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:'#185FA5'}}>{fmtDateTime(c.callbackDate,c.callbackTime)}</span>}
+                      <Badge color={st.color}>{st.label}</Badge>
+                    </div>
+                    <button onClick={()=>onDelete(c.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1842,19 +1977,24 @@ export default function TailgatePayday() {
   const [loading,setLoading]=useState(true);
   const [modal,setModal]=useState(null);
   const [calls,setCalls]=useState([]);
+  const [signups,setSignups]=useState([]);
+  const [recovery,setRecovery]=useState(false);
 
   // Auth
   useEffect(()=>{
     supabase.auth.getSession().then(({data:{session}})=>{setSession(session);setAuthLoading(false);});
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_,session)=>setSession(session));
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((event,session)=>{
+      setSession(session);
+      if(event==='PASSWORD_RECOVERY') setRecovery(true);
+    });
     return ()=>subscription.unsubscribe();
   },[]);
 
   // Data load
   useEffect(()=>{
     if(!session) return;
-    Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn'),loadS('po_calls')]).then(([e,d,a,c])=>{
-      setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setCalls(Array.isArray(c)?c:[]); setLoading(false);
+    Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn'),loadS('po_calls'),loadS('po_signups')]).then(([e,d,a,c,s])=>{
+      setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setCalls(Array.isArray(c)?c:[]); setSignups(Array.isArray(s)?s:[]); setLoading(false);
     });
   },[session]);
 
@@ -1862,6 +2002,14 @@ export default function TailgatePayday() {
   const setD=v=>{setDeals(v);saveS('po_deals',v);};
   const setA=v=>{setAssignments(v);saveS('po_asgn',v);};
   const setC=v=>{setCalls(v);saveS('po_calls',v);};
+  const setSU=v=>{setSignups(v);saveS('po_signups',v);};
+  // A signed-in user with no roster match — log it once so the admin can add them
+  const requestAccess=email=>{
+    const em=(email||'').toLowerCase();
+    if(!em || signups.some(s=>s.email.toLowerCase()===em) || employees.some(e=>e.email?.toLowerCase()===em)) return;
+    setSU([...signups,{email,requestedAt:new Date().toISOString()}]);
+  };
+  const dismissSignup=email=>setSU(signups.filter(s=>s.email.toLowerCase()!==(email||'').toLowerCase()));
 
   // Merchant call assignments / mini-CRM
   const addCall=rec=>{ setC([...calls,{...rec,id:genId(),status:'to_call',createdAt:new Date().toISOString()}]); setModal(null); };
@@ -1894,7 +2042,7 @@ export default function TailgatePayday() {
     a.href=url; a.download=`tailgate-backup-${today()}.json`; a.click(); URL.revokeObjectURL(url);
   };
 
-  const addEmployee=(name,email)=>{ setE([...employees,{id:genId(),name,email:email||'',createdAt:new Date().toISOString()}]); setModal(null); };
+  const addEmployee=(name,email)=>{ setE([...employees,{id:genId(),name,email:email||'',createdAt:new Date().toISOString()}]); if(email) setSU(signups.filter(s=>s.email.toLowerCase()!==email.toLowerCase())); setModal(null); };
   const deleteEmployee=id=>setE(employees.filter(e=>e.id!==id));
   const addDeal=deal=>{ setD([...deals,{...deal,id:genId(),createdAt:new Date().toISOString(),monthlyActivations:Array(12).fill(0),paid:{setterUpfront:false,closerUpfront:false,setterBackend:Array(12).fill(false),closerBackend:Array(12).fill(false)}}]); setModal(null); };
   const updateActivation=(dealId,idx,val)=>{ const u=deals.map(d=>{if(d.id!==dealId) return d; const ma=[...d.monthlyActivations]; ma[idx]=Math.max(0,+val||0); return {...d,monthlyActivations:ma};}); setD(u); setSelectedDeal(u.find(d=>d.id===dealId)||null); };
@@ -1919,9 +2067,10 @@ export default function TailgatePayday() {
   const isAdmin=userEmail===ADMIN_EMAIL;
 
   if(authLoading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#64748b',fontSize:'14px'}}>Loading…</div>;
+  if(recovery) return <ResetPasswordPage onDone={()=>setRecovery(false)} onCancel={()=>{setRecovery(false);signOut();}}/>;
   if(!session) return <LoginPage/>;
-  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake}/>;
-  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'200px',color:'var(--color-text-secondary)',fontSize:'14px'}}>Loading…</div>;
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#64748b',fontSize:'14px'}}>Loading…</div>;
+  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess}/>;
 
   const TABS=[['employees','Employees',Users],['deals','Deals',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
 
@@ -1948,14 +2097,14 @@ export default function TailgatePayday() {
         </div>
       </div>
 
-      {tab==='employees'&&<EmployeesView employees={employees} deals={deals} assignments={assignments} onAdd={()=>setModal({type:'addEmp'})} onDelete={deleteEmployee}/>}
+      {tab==='employees'&&<EmployeesView employees={employees} deals={deals} assignments={assignments} signups={signups} onAdd={()=>setModal({type:'addEmp'})} onAddRequest={email=>setModal({type:'addEmp',data:{email}})} onDismissRequest={dismissSignup} onDelete={deleteEmployee}/>}
       {tab==='deals'&&(selectedDeal?<DealDetail deal={selectedDeal} employees={employees} onBack={()=>setSelectedDeal(null)} onUpdateActivation={updateActivation} onDelete={deleteDeal}/>:<DealsView deals={deals} employees={employees} onSelect={setSelectedDeal} onAdd={()=>setModal({type:'addDeal'})}/>)}
       {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onImportCSV={()=>setModal({type:'importCSV'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
       {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
       {tab==='payroll'&&<PayrollView employees={employees} deals={deals} assignments={assignments}/>}
       {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch}/>}
 
-      {modal?.type==='addEmp'&&<AddEmployeeModal onAdd={addEmployee} onClose={()=>setModal(null)}/>}
+      {modal?.type==='addEmp'&&<AddEmployeeModal initialEmail={modal.data?.email} onAdd={addEmployee} onClose={()=>setModal(null)}/>}
       {modal?.type==='addDeal'&&<AddDealModal employees={employees} onAdd={addDeal} onClose={()=>setModal(null)}/>}
       {modal?.type==='addPeriod'&&<AddPeriodModal employees={employees} onAdd={addPeriod} onClose={()=>setModal(null)}/>}
       {modal?.type==='importCSV'&&<CSVImportModal employees={employees} assignments={assignments} onSave={updated=>{setA(updated);setModal(null);}} onClose={()=>setModal(null)}/>}
