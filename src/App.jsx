@@ -14,6 +14,8 @@ const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env
 const ADMIN_EMAIL = 'shuffman@tailgateofficial.com';
 const APP_NAME = 'Tailgate Payday';
 const APP_TAGLINE = 'Tailgate Official Payout Management';
+// Fixed sign-up form the merchant uses to get on the card (callers can't change this)
+const SIGNUP_FORM_URL = 'https://JoinTailgate.com';
 
 // ─── Storage ──────────────────────────────────────────────────────
 // Saves instantly to localStorage (so nothing is ever lost on tab switch)
@@ -1142,6 +1144,9 @@ function LogCallModal({ call, callerName, orgs=[], onUpdateCall, onAddRecordingT
   const [cbDate,setCbDate]=useState(call.callbackDate||addDays(today(),2));
   const [cbTime,setCbTime]=useState(call.callbackTime||'');
   const [note,setNote]=useState('');
+  const [emailSubject,setEmailSubject]=useState(`More info from Tailgate Fundraising${call.business?` — ${call.business}`:''}`);
+  const [emailBody,setEmailBody]=useState(`Hi${call.contact?` ${call.contact}`:''},\n\nGreat speaking with you today! As promised, here's a bit more about partnering with Tailgate Fundraising${call.business?` for ${call.business}`:''}.\n\n[Add any specific details you discussed here.]\n\nWhenever you're ready, just use the sign-up link below to get on the card. Any questions, reply right here.`);
+  const [emailed,setEmailed]=useState(false);
 
   const setDmF=(k,v)=>setDm(d=>({...d,[k]:v}));
   const setAddr=(i,k,v)=>setAddresses(a=>a.map((x,j)=>j===i?{...x,[k]:v}:x));
@@ -1174,6 +1179,13 @@ function LogCallModal({ call, callerName, orgs=[], onUpdateCall, onAddRecordingT
 
   const withNote=base=>note.trim()?((base?base+'\n\n':'')+`${today()}: ${note.trim()}`):base;
   const commit=patch=>{ onUpdateCall(call.id,{...patch, notes:withNote(call.notes||'')}); onClose(); };
+  // Open the caller's email app with a ready-to-send draft (fixed sign-up link + caller name auto-added)
+  const emailTo=email||call.email;
+  const openEmail=()=>{
+    const footer=`\n\nSign up to get on the card: ${SIGNUP_FORM_URL}\n\n— ${callerName}\nTailgate Fundraising`;
+    window.location.href=`mailto:${encodeURIComponent(emailTo||'')}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(emailBody+footer)}`;
+    setEmailed(true);
+  };
 
   const save=()=>{
     const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
@@ -1183,7 +1195,7 @@ function LogCallModal({ call, callerName, orgs=[], onUpdateCall, onAddRecordingT
       if(!hasVideoTake) return; // guarded by the disabled button too
       commit({ status:'completed', verifyStatus:'pending', submittedTake, recordedAt:new Date().toISOString(), ...details });
     } else if(outcome==='needs_info'){
-      commit({ status:'needs_info', ...(submittedTake!=null?{submittedTake}:{}), ...details });
+      commit({ status:'needs_info', ...(submittedTake!=null?{submittedTake}:{}), ...details, ...(emailed?{infoEmailedAt:new Date().toISOString()}:{}) });
     } else if(outcome==='callback'){
       commit({ status:'callback', callbackDate:cbDate, callbackTime:cbTime, spokeTo, email, phone, decisionMaker:dm });
     } else if(outcome==='no_answer'){
@@ -1294,6 +1306,24 @@ function LogCallModal({ call, callerName, orgs=[], onUpdateCall, onAddRecordingT
           <div style={{fontSize:'12px',fontWeight:'600',color:'#854F0B',marginBottom:'4px'}}>Their details</div>
           <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>They’re interested but need more info or time to decide. Grab everything you can and follow up.</div>
           {detailsForm}
+
+          <div style={{borderTop:'0.5px solid var(--color-border-tertiary)',marginTop:'8px',paddingTop:'14px'}}>
+            <div style={{fontSize:'12px',fontWeight:'600',color:'#185FA5',marginBottom:'10px'}}>Send them the info by email</div>
+            {emailTo?(
+              <>
+                <Field label="To"><input style={{...INP,background:'var(--color-background-secondary)'}} value={emailTo} readOnly/></Field>
+                <Field label="Subject"><input style={INP} value={emailSubject} onChange={e=>setEmailSubject(e.target.value)}/></Field>
+                <Field label="Message (edit anything — add the specific details you discussed)"><textarea style={{...INP,minHeight:'120px',resize:'vertical'}} value={emailBody} onChange={e=>setEmailBody(e.target.value)}/></Field>
+                <div style={{background:'var(--color-background-secondary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px',fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>
+                  Automatically added to the bottom (can’t be changed): the sign-up link <b style={{color:'#185FA5'}}>{SIGNUP_FORM_URL}</b> and your name, <b style={{color:'#0f172a'}}>{callerName}</b>.
+                </div>
+                {emailed&&<div style={{fontSize:'12px',color:'#0F6E56',marginBottom:'10px',fontWeight:'500'}}>Email opened — send it from your mail app, then save below.</div>}
+                <button style={{...BTN(true),width:'100%',justifyContent:'center',marginBottom:'8px'}} onClick={openEmail}><FileText size={14}/>Open email to send</button>
+              </>
+            ):(
+              <div style={{fontSize:'13px',color:'#854F0B',marginBottom:'12px'}}>Add their email in the details above to send them the info.</div>
+            )}
+          </div>
           <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save — needs more info</button>
         </div>
       )}
