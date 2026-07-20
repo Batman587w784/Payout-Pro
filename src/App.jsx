@@ -1174,6 +1174,23 @@ const OUTCOMES = [
 ];
 // Standardized business-type / category options
 const BUSINESS_TYPES = ['Fast food','Pizza','Casual dining','Bakery/coffee shop','Healthy','Ethnic','International','Food truck','High-end','Nightlife','Other'];
+
+// What a call is worth (caller payout) — $5 to $250 in $5 steps
+const PAYOUT_AMOUNTS = Array.from({length:50},(_,i)=>(i+1)*5);
+const leadValue = c => { if(c?.value!=null&&c.value!=='') return +c.value||0; const d=(c?.discount||'').toString().replace(/[^0-9.]/g,''); return d?+d:0; };
+const ValuePicker = ({value,onChange}) => (
+  <div style={{display:'flex',flexWrap:'wrap',gap:'6px',maxHeight:'156px',overflowY:'auto',padding:'2px'}}>
+    {PAYOUT_AMOUNTS.map(a=>{ const on=+value===a; return (
+      <button key={a} type="button" onClick={()=>onChange(a)} style={{padding:'6px 10px',minWidth:'48px',cursor:'pointer',fontFamily:'var(--font-sans)',fontSize:'12px',fontWeight:'600',borderRadius:'var(--border-radius-md)',border:`1px solid ${on?'#5DCAA5':'var(--color-border-tertiary)'}`,background:on?'#E1F5EE':'var(--color-background-primary)',color:on?'#0F6E56':'#0f172a'}}>${a}</button>
+    );})}
+  </div>
+);
+const ValueSelect = ({value,onChange}) => (
+  <select style={{...INP,width:'auto',padding:'5px 8px',fontSize:'12px'}} value={value||''} onChange={e=>onChange(e.target.value?+e.target.value:0)}>
+    <option value="">$ —</option>
+    {PAYOUT_AMOUNTS.map(a=><option key={a} value={a}>${a}</option>)}
+  </select>
+);
 // Small field helpers for the Log Call form (module-level so inputs keep focus across renders)
 const Wait = ({children}) => <div style={{display:'flex',alignItems:'center',gap:'7px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'7px 11px',fontSize:'12px',color:'#854F0B',margin:'0 0 12px',fontWeight:'500'}}><Pause size={13} style={{flexShrink:0}}/><span>{children||'Wait for them to say “yes.”'}</span></div>;
 const DMFields = ({dm,set}) => (
@@ -1295,7 +1312,7 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
           <div style={{minWidth:0}}>
             <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
               <span style={{fontSize:'20px',fontWeight:'600',color:'#0f172a'}}>{call.business||'Unknown business'}</span>
-              {call.discount&&<Badge color="teal">{call.discount} tier</Badge>}
+              {leadValue(call)>0&&<span style={{background:'#E1F5EE',border:'1px solid #5DCAA5',borderRadius:'100px',padding:'3px 12px',fontSize:'14px',fontWeight:'700',color:'#0F6E56'}}>${leadValue(call)} payout</span>}
             </div>
             {leadAddress&&<div style={{display:'flex',alignItems:'center',gap:'5px',fontSize:'13px',color:'#64748b',marginTop:'4px'}}><MapPin size={13} style={{flexShrink:0}}/><span>{leadAddress}</span></div>}
           </div>
@@ -1420,6 +1437,7 @@ function LeadRow({ c, onOpenLog }) {
         <div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>{[c.contact,c.phone,c.location].filter(Boolean).join(' · ')||'No contact details'}</div>
       </div>
       <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+        {leadValue(c)>0&&<span style={{background:'#E1F5EE',border:'1px solid #5DCAA5',borderRadius:'100px',padding:'2px 10px',fontSize:'12px',fontWeight:'700',color:'#0F6E56',whiteSpace:'nowrap'}}>${leadValue(c)}</span>}
         {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:overdue?'#A32D2D':'#185FA5',fontWeight:'500'}}>{overdue?'Due ':''}{fmtDateTime(c.callbackDate,c.callbackTime)}</span>}
         {(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
         <Badge color={st.color}>{st.label}</Badge>
@@ -1431,31 +1449,52 @@ function LeadRow({ c, onOpenLog }) {
 
 function CallerHome({ myCalls, onOpenLog }) {
   const t=today();
+  const [area,setArea]=useState('all');
+  const [sort,setSort]=useState('priority');
+  const [shownU,setShownU]=useState(LEAD_BATCH);
+  const [shownR,setShownR]=useState(LEAD_BATCH);
+  const order={callback:0,completed:1,interested:1,recorded:1,needs_info:2,no_answer:3,not_interested:4};
   // "Up next" = never contacted, or a callback whose date has arrived / passed
   const isUrgent=c=>c.status==='to_call'||(c.status==='callback'&&(c.callbackDate||'')<=t);
-  const urgent=myCalls.filter(isUrgent).sort((a,b)=>{
-    const ac=a.status==='callback'?0:1, bc=b.status==='callback'?0:1;
-    return (ac-bc)||((a.callbackDate||'').localeCompare(b.callbackDate||''));
-  });
-  const order={callback:0,completed:1,interested:1,recorded:1,needs_info:2,no_answer:3,not_interested:4};
-  const rest=myCalls.filter(c=>!isUrgent(c)).sort((a,b)=>((order[a.status]??9)-(order[b.status]??9))||((a.callbackDate||'').localeCompare(b.callbackDate||'')));
+  const inArea=c=>area==='all'||leadState(c)===area;
+  const states=[...new Set(myCalls.map(leadState))].sort();
+  const sortList=(list,isU)=>{
+    if(sort==='pay') return [...list].sort((a,b)=>leadValue(b)-leadValue(a)||(a.business||'').localeCompare(b.business||''));
+    if(sort==='area') return [...list].sort((a,b)=>leadState(a).localeCompare(leadState(b))||leadCity(a).localeCompare(leadCity(b)));
+    if(isU) return [...list].sort((a,b)=>{ const ac=a.status==='callback'?0:1,bc=b.status==='callback'?0:1; return (ac-bc)||((a.callbackDate||'').localeCompare(b.callbackDate||'')); });
+    return [...list].sort((a,b)=>((order[a.status]??9)-(order[b.status]??9))||((a.callbackDate||'').localeCompare(b.callbackDate||'')));
+  };
+  const urgent=sortList(myCalls.filter(c=>inArea(c)&&isUrgent(c)),true);
+  const rest=sortList(myCalls.filter(c=>inArea(c)&&!isUrgent(c)),false);
   const counts={
     to_call: myCalls.filter(c=>c.status==='to_call').length,
     callback: myCalls.filter(c=>c.status==='callback').length,
     needs_info: myCalls.filter(c=>c.status==='needs_info').length,
     completed: myCalls.filter(c=>c.status==='completed'||c.status==='interested'||c.status==='recorded').length,
   };
-  const [shownU,setShownU]=useState(LEAD_BATCH);
-  const [shownR,setShownR]=useState(LEAD_BATCH);
   const uVis=urgent.slice(0,shownU), uRem=urgent.length-uVis.length;
   const rVis=rest.slice(0,shownR), rRem=rest.length-rVis.length;
+  const selStyle={...INP,width:'auto',padding:'6px 9px',fontSize:'12px'};
   return (
     <div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',marginBottom:'16px'}}>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',marginBottom:'14px'}}>
         <Metric label="To call" value={counts.to_call}/>
         <Metric label="Callbacks" value={counts.callback} color="#185FA5"/>
         <Metric label="Needs info" value={counts.needs_info} color="#854F0B"/>
         <Metric label="Completed" value={counts.completed} color="#0F6E56"/>
+      </div>
+      <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap',marginBottom:'14px'}}>
+        <span style={{fontSize:'12px',color:'#64748b'}}>Area</span>
+        <select style={selStyle} value={area} onChange={e=>{setArea(e.target.value);setShownU(LEAD_BATCH);setShownR(LEAD_BATCH);}}>
+          <option value="all">All areas</option>
+          {states.map(s=><option key={s} value={s}>{s}</option>)}
+        </select>
+        <span style={{fontSize:'12px',color:'#64748b',marginLeft:'6px'}}>Sort by</span>
+        <select style={selStyle} value={sort} onChange={e=>setSort(e.target.value)}>
+          <option value="priority">Priority</option>
+          <option value="pay">Highest pay</option>
+          <option value="area">Location</option>
+        </select>
       </div>
 
       <div style={{...CARD,marginBottom:'14px'}}>
@@ -1530,8 +1569,8 @@ function CallerCRM({ myCalls, onOpenLog, onWorkQueue }) {
                   <div style={{fontSize:'12px',color:'#94a3b8',textAlign:'center',padding:'16px 8px'}}>Empty</div>
                 ):items.map(x=>(
                   <button key={x.id} onClick={()=>onOpenLog(x)} style={{textAlign:'left',background:'var(--color-background-primary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 11px',cursor:'pointer',fontFamily:'var(--font-sans)'}}>
-                    <div style={{fontWeight:'500',fontSize:'13px',color:'#0f172a'}}>{x.business}</div>
-                    <div style={{fontSize:'11px',color:'#64748b',marginTop:'2px'}}>{[x.contact,x.phone].filter(Boolean).join(' · ')||'—'}</div>
+                    <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:'6px'}}><div style={{fontWeight:'500',fontSize:'13px',color:'#0f172a'}}>{x.business}</div>{leadValue(x)>0&&<span style={{fontSize:'12px',fontWeight:'700',color:'#0F6E56',whiteSpace:'nowrap'}}>${leadValue(x)}</span>}</div>
+                    <div style={{fontSize:'11px',color:'#64748b',marginTop:'2px'}}>{[leadCity(x),x.phone].filter(Boolean).join(' · ')||'—'}</div>
                     {x.status==='callback'&&x.callbackDate&&<div style={{fontSize:'11px',color:x.callbackDate<today()?'#A32D2D':'#185FA5',fontWeight:'500',marginTop:'3px'}}>Call back {fmtDateTime(x.callbackDate,x.callbackTime)}</div>}
                     {(x.status==='completed'||x.status==='interested'||x.status==='recorded')&&x.verifyStatus&&<div style={{marginTop:'4px'}}><Badge color={VERIFY[x.verifyStatus].color}>{VERIFY[x.verifyStatus].label}</Badge></div>}
                   </button>
@@ -1632,7 +1671,7 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
   const submitted = recs.find(r=>r.take===call.submittedTake) || recs[recs.length-1] || null;
   const [sel,setSel]=useState(submitted);
   const [url,setUrl]=useState(''); const [loading,setLoading]=useState(false); const [err,setErr]=useState('');
-  const [amt,setAmt]=useState('');
+  const [amt,setAmt]=useState(leadValue(call)||'');
   const load=async(rec)=>{
     setSel(rec); setLoading(true); setErr(''); setUrl('');
     try{ const {data,error}=await supabase.storage.from(CALL_BUCKET).createSignedUrl(rec.recordingPath,3600); if(error) throw error; setUrl(data.signedUrl); }
@@ -1670,13 +1709,17 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
       {url&&(isVideo
         ? <video src={url} controls style={{width:'100%',maxWidth:'420px',borderRadius:'var(--border-radius-md)',margin:'10px 0',display:'block'}}/>
         : <audio src={url} controls style={{width:'100%',margin:'10px 0'}}/>)}
-      <div style={{display:'flex',gap:'8px',marginTop:'10px',alignItems:'center',flexWrap:'wrap'}}>
-        <div style={{display:'flex',alignItems:'center',gap:'6px'}}>
-          <span style={{fontSize:'12px',color:'#64748b'}}>Payout $</span>
-          <input style={{...INP,width:'110px',padding:'6px 9px'}} type="number" step="0.01" placeholder="0.00" value={amt} onChange={e=>setAmt(e.target.value)}/>
+      <div style={{marginTop:'12px'}}>
+        <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px'}}>
+          <span style={{fontSize:'12px',color:'#64748b'}}>Payout</span>
+          <input style={{...INP,width:'110px',padding:'6px 9px'}} type="number" step="5" placeholder="0.00" value={amt} onChange={e=>setAmt(e.target.value)}/>
+          <span style={{fontSize:'11px',color:'#94a3b8'}}>or pick:</span>
         </div>
-        <button style={{...BTN(true),opacity:amtNum>0?1:0.5}} disabled={!(amtNum>0)} onClick={()=>onApprove(call.id,amtNum)}><CheckCircle size={13}/>Approve &amp; pay</button>
-        <button style={{...BTN(false),color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}} onClick={()=>onReject(call.id)}>Reject / redo</button>
+        <ValuePicker value={+amt} onChange={setAmt}/>
+        <div style={{display:'flex',gap:'8px',marginTop:'10px'}}>
+          <button style={{...BTN(true),opacity:amtNum>0?1:0.5}} disabled={!(amtNum>0)} onClick={()=>onApprove(call.id,amtNum)}><CheckCircle size={13}/>Approve &amp; pay {amtNum>0?fmt$(amtNum):''}</button>
+          <button style={{...BTN(false),color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}} onClick={()=>onReject(call.id)}>Reject / redo</button>
+        </div>
       </div>
     </div>
   );
@@ -1688,8 +1731,11 @@ const leadDone = c => c.status==='completed'||c.status==='interested'||c.status=
 const leadState = c => { const s=(c.addresses?.[0]?.state||'').trim(); if(s) return s; const l=(c.location||'').trim(); if(l.includes(',')) return l.split(',').pop().trim(); return 'Unknown'; };
 const leadCity  = c => { const ci=(c.addresses?.[0]?.city||'').trim(); if(ci) return ci; const l=(c.location||'').trim(); if(l.includes(',')) return l.split(',')[0].trim(); return l||'—'; };
 
-function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImport, onMarkTouch }) {
+const leadGroup = (c,by) => by==='city'?leadCity(c):by==='school'?(c.school||'No school/org'):leadState(c);
+
+function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImport, onMarkTouch, onSetValue }) {
   const [areaCaller,setAreaCaller]=useState('all');
+  const [groupBy,setGroupBy]=useState('state');
   const [openState,setOpenState]=useState('');
   const pending=calls.filter(c=>(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&(c.submittedTake!=null||c.recordingPath)&&(!c.verifyStatus||c.verifyStatus==='pending'));
   const followUps=calls.filter(c=>c.status==='send_info');
@@ -1701,9 +1747,9 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
   }).sort((a,b)=>b.total-a.total);
 
   const areaCalls=areaCaller==='all'?calls:calls.filter(c=>c.callerId===areaCaller);
-  const stateMap={};
-  areaCalls.forEach(c=>{ const k=leadState(c); (stateMap[k]=stateMap[k]||[]).push(c); });
-  const areas=Object.entries(stateMap).map(([state,list])=>({state,total:list.length,called:list.filter(leadContacted).length,list})).sort((a,b)=>b.total-a.total);
+  const groupMap={};
+  areaCalls.forEach(c=>{ const k=leadGroup(c,groupBy); (groupMap[k]=groupMap[k]||[]).push(c); });
+  const areas=Object.entries(groupMap).map(([state,list])=>({state,total:list.length,called:list.filter(leadContacted).length,list})).sort((a,b)=>b.total-a.total);
 
   return (
     <div>
@@ -1762,14 +1808,21 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
         </div>
       )}
 
-      {/* By area */}
+      {/* By area / group */}
       <div style={CARD}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-          <span style={{fontWeight:'500',fontSize:'14px'}}>By area</span>
-          <select style={{...INP,width:'auto',padding:'6px 9px',fontSize:'12px'}} value={areaCaller} onChange={e=>setAreaCaller(e.target.value)}>
-            <option value="all">All callers</option>
-            {callerStats.map(s=><option key={s.cid} value={s.cid}>{s.name}</option>)}
-          </select>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)',flexWrap:'wrap'}}>
+          <span style={{fontWeight:'500',fontSize:'14px'}}>Coverage by {groupBy==='city'?'city':groupBy==='school'?'school / org':'state'}</span>
+          <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
+            <select style={{...INP,width:'auto',padding:'6px 9px',fontSize:'12px'}} value={groupBy} onChange={e=>{setGroupBy(e.target.value);setOpenState('');}}>
+              <option value="state">By state</option>
+              <option value="city">By city / town</option>
+              <option value="school">By school / org</option>
+            </select>
+            <select style={{...INP,width:'auto',padding:'6px 9px',fontSize:'12px'}} value={areaCaller} onChange={e=>setAreaCaller(e.target.value)}>
+              <option value="all">All callers</option>
+              {callerStats.map(s=><option key={s.cid} value={s.cid}>{s.name}</option>)}
+            </select>
+          </div>
         </div>
         {areas.length===0?(
           <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>No leads yet. Use “Import leads” or “Assign call” to add some.</div>
@@ -1794,7 +1847,7 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
                   <div key={c.id} style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'12px',alignItems:'center',padding:'10px 18px 10px 30px',borderTop:'0.5px solid var(--color-border-tertiary)',background:'var(--color-background-secondary)'}}>
                     <div style={{minWidth:0}}><div style={{fontSize:'13px',fontWeight:'500'}}>{c.business}</div><div style={{fontSize:'11px',color:'#64748b'}}>{[leadCity(c),areaCaller==='all'?nameOf(c.callerId):null].filter(Boolean).join(' · ')}</div></div>
                     <div style={{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap',justifyContent:'flex-end'}}>
-                      {c.payout?.amount!=null&&<Badge color="teal">{fmt$(c.payout.amount)} paid</Badge>}
+                      {c.payout?.amount!=null?<Badge color="teal">{fmt$(c.payout.amount)} paid</Badge>:<span title="What this call pays the caller"><ValueSelect value={leadValue(c)||''} onChange={v=>onSetValue(c.id,v)}/></span>}
                       {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:'#185FA5'}}>{fmtDateTime(c.callbackDate,c.callbackTime)}</span>}
                       <Badge color={st.color}>{st.label}</Badge>
                     </div>
@@ -1816,10 +1869,10 @@ function AddCallModal({ employees, onAdd, onClose }) {
   const [contact,setContact]=useState('');
   const [phone,setPhone]=useState('');
   const [location,setLocation]=useState('');
-  const [discount,setDiscount]=useState('');
+  const [value,setValue]=useState(0);
   const [notes,setNotes]=useState('');
   const ok=callerId&&business.trim();
-  const submit=()=>{ if(!ok) return; onAdd({callerId,business:business.trim(),contact:contact.trim(),phone:phone.trim(),location:location.trim(),discount:discount.trim(),notes:notes.trim()}); };
+  const submit=()=>{ if(!ok) return; onAdd({callerId,business:business.trim(),contact:contact.trim(),phone:phone.trim(),location:location.trim(),value,notes:notes.trim()}); };
   return (
     <ModalWrap title="Assign a merchant call" onClose={onClose}>
       <EmpPicker employees={employees} value={callerId} onChange={setCallerId} label="Assign to caller"/>
@@ -1829,7 +1882,8 @@ function AddCallModal({ employees, onAdd, onClose }) {
         <Field label="Phone"><input style={INP} value={phone} onChange={e=>setPhone(e.target.value)} placeholder="(555) 000-0000"/></Field>
       </div>
       <Field label="Location(s)"><input style={INP} value={location} onChange={e=>setLocation(e.target.value)} placeholder="e.g. Downtown & Eastside"/></Field>
-      <Field label="Discount"><select style={INP} value={discount} onChange={e=>setDiscount(e.target.value)}><option value="">Select…</option>{['$15','$30','$40','$50'].map(t=><option key={t} value={t}>{t}</option>)}</select></Field>
+      <Field label={`What this call pays the caller${value?` — $${value}`:''}`}><ValuePicker value={value} onChange={setValue}/></Field>
+      <div style={{fontSize:'12px',color:'#64748b',marginTop:'-4px',marginBottom:'12px'}}>This is the caller’s payout for closing it — not the merchant’s discount. The caller fills in the actual discount (e.g. 15% off) on the call.</div>
       <Field label="Notes (optional)"><textarea style={{...INP,minHeight:'56px',resize:'vertical'}} value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
       <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'6px',opacity:ok?1:0.5}} onClick={submit} disabled={!ok}>Assign call</button>
     </ModalWrap>
@@ -1863,6 +1917,7 @@ function LeadImportModal({ employees, onImport, onClose }) {
   const [rows,setRows]=useState([]);
   const [map,setMap]=useState({});
   const [callerId,setCallerId]=useState('');
+  const [batchValue,setBatchValue]=useState(0);
   const [dragOver,setDragOver]=useState(false);
   const fileRef=useRef();
 
@@ -1883,7 +1938,7 @@ function LeadImportModal({ employees, onImport, onClose }) {
       business:get(r,'business'), contact:get(r,'contact'), phone:get(r,'phone'), email:get(r,'email'),
       location:[addr.city,addr.state].filter(Boolean).join(', '), addresses:hasAddr?[addr]:[],
       category:get(r,'category'), businessType:get(r,'category'), school:get(r,'school'),
-      additionalInfo:get(r,'additionalInfo'), notes:get(r,'notes'), discount:'',
+      additionalInfo:get(r,'additionalInfo'), notes:get(r,'notes'), value:batchValue||0,
     };
   };
   const validRows=rows.filter(r=>map.business&&(r[map.business]||'').toString().trim());
@@ -1904,6 +1959,10 @@ function LeadImportModal({ employees, onImport, onClose }) {
   return (
     <ModalWrap title={`Map columns — ${validRows.length} leads`} onClose={onClose} wide>
       <div style={{marginBottom:'12px'}}><EmpPicker employees={employees} value={callerId} onChange={setCallerId} label="Assign these leads to caller"/></div>
+      <div style={{marginBottom:'12px'}}>
+        <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>Payout per call for this batch (what the caller earns){batchValue?` — $${batchValue}`:' — optional, can set per-lead later'}</label>
+        <ValuePicker value={batchValue} onChange={setBatchValue}/>
+      </div>
       <div style={{fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'8px'}}>Match each field to a column from your file. We guessed where we could.</div>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px',marginBottom:'14px'}}>
         {LEAD_FIELDS.map(([f,label,req])=>(
@@ -2102,7 +2161,7 @@ export default function TailgatePayday() {
       {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onImportCSV={()=>setModal({type:'importCSV'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
       {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
       {tab==='payroll'&&<PayrollView employees={employees} deals={deals} assignments={assignments}/>}
-      {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch}/>}
+      {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})}/>}
 
       {modal?.type==='addEmp'&&<AddEmployeeModal initialEmail={modal.data?.email} onAdd={addEmployee} onClose={()=>setModal(null)}/>}
       {modal?.type==='addDeal'&&<AddDealModal employees={employees} onAdd={addDeal} onClose={()=>setModal(null)}/>}
