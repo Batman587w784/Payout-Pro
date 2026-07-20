@@ -38,7 +38,6 @@ const SM = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','D
 const addMonths = (ym,n) => { if(!ym) return ''; let [y,m]=ym.split('-').map(Number); m+=n; while(m>12){m-=12;y++;} return `${y}-${String(m).padStart(2,'0')}`; };
 const fmtYM = ym => { if(!ym) return ''; const [y,m]=ym.split('-').map(Number); return `${SM[m-1]} ${y}`; };
 const today = () => new Date().toISOString().split('T')[0];
-const currYM = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; };
 const addDays = (date,n) => { const d=new Date(date); d.setDate(d.getDate()+n); return d.toISOString().split('T')[0]; };
 const fmtDate = s => { if(!s) return ''; const [y,m,d]=s.split('-'); return `${SM[+m-1]} ${+d}, ${y}`; };
 const fmtTime = t => { if(!t) return ''; const [h,m]=t.split(':').map(Number); const ap=h<12?'AM':'PM'; return `${h%12||12}:${String(m).padStart(2,'0')} ${ap}`; };
@@ -244,7 +243,7 @@ function ResetPasswordPage({ onDone, onCancel }) {
 }
 
 // ─── EMPLOYEE / CALLER PORTAL ─────────────────────────────────────
-function EmployeePortal({employees,deals,assignments,calls,userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess}) {
+function EmployeePortal({employees,deals,assignments,calls,orgs,userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess}) {
   const [screen,setScreen]=useState('home');
   const [logId,setLogId]=useState('');
   const emp = employees.find(e=>e.email?.toLowerCase()===userEmail?.toLowerCase());
@@ -291,7 +290,7 @@ function EmployeePortal({employees,deals,assignments,calls,userEmail,onSignOut,o
         {screen==='crm'&&<CallerCRM myCalls={myCalls} onOpenLog={c=>setLogId(c.id)} onWorkQueue={()=>setScreen('home')}/>}
         {screen==='payouts'&&<CallerPayouts emp={emp} deals={deals} assignments={assignments}/>}
       </div>
-      {logCall&&<LogCallModal call={logCall} callerName={emp.name} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake} onClose={()=>setLogId('')}/>}
+      {logCall&&<LogCallModal call={logCall} callerName={emp.name} orgs={orgs} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake} onClose={()=>setLogId('')}/>}
     </div>
   );
 }
@@ -586,155 +585,74 @@ function AddEmployeeModal({onAdd,onClose,initialEmail}) {
   );
 }
 
-// ─── DEALS ────────────────────────────────────────────────────────
-function AddDealModal({employees,onAdd,onClose}) {
-  const [f,setF]=useState({orgName:'',cards:'',startMonth:currYM(),sId:'',sRate:'',cId:'',cRate:''});
+// ─── ORGANIZATIONS ────────────────────────────────────────────────
+const ORG_TYPES = ['School','Youth football','Youth sports','Booster club','Church','Nonprofit','Business','Other'];
+
+function AddOrgModal({onAdd,onClose}) {
+  const [f,setF]=useState({name:'',type:'',city:'',state:'',notes:''});
   const s=(k,v)=>setF(p=>({...p,[k]:v}));
-  const upfront=(f.cards&&f.sRate&&f.cRate)?0.25*+f.cards*(+f.sRate+ +f.cRate):null;
-  const submit=()=>{
-    if(!f.orgName||!f.cards||!f.sId||!f.sRate||!f.cId||!f.cRate) return;
-    const sEmp=employees.find(e=>e.id===f.sId), cEmp=employees.find(e=>e.id===f.cId);
-    onAdd({orgName:f.orgName,cardsOrdered:+f.cards,startMonth:f.startMonth||currYM(),setter:{employeeId:f.sId,name:sEmp?.name||'',ratePerCard:+f.sRate},closer:{employeeId:f.cId,name:cEmp?.name||'',ratePerCard:+f.cRate}});
-  };
+  const ok=f.name.trim();
   return (
-    <ModalWrap title="New deal" onClose={onClose}>
-      <Field label="Organization name"><input style={INP} placeholder="e.g. Westside Youth Sports" value={f.orgName} onChange={e=>s('orgName',e.target.value)}/></Field>
+    <ModalWrap title="Add organization" onClose={onClose}>
+      <Field label="Organization name"><input style={INP} placeholder="e.g. Lexington Youth Football" value={f.name} onChange={e=>s('name',e.target.value)} autoFocus/></Field>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
-        <Field label="Cards ordered"><input style={INP} type="number" placeholder="500" value={f.cards} onChange={e=>s('cards',e.target.value)}/></Field>
-        <Field label="Start month"><input style={INP} type="month" value={f.startMonth} onChange={e=>s('startMonth',e.target.value)}/></Field>
+        <Field label="Type"><select style={INP} value={f.type} onChange={e=>s('type',e.target.value)}><option value="">Select…</option>{ORG_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select></Field>
+        <Field label="City / town"><input style={INP} value={f.city} onChange={e=>s('city',e.target.value)} placeholder="Lexington"/></Field>
       </div>
-      {['setter','closer'].map(role=>(
-        <div key={role} style={{background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'13px',marginBottom:'12px'}}>
-          <div style={{fontSize:'12px',fontWeight:'500',color:role==='setter'?'#854F0B':'#185FA5',marginBottom:'10px'}}>{role==='setter'?'Appointment setter':'Closer'}</div>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
-            <EmpPicker employees={employees} label="Select employee" value={f[role==='setter'?'sId':'cId']} onChange={v=>s(role==='setter'?'sId':'cId',v)}/>
-            <Field label="Rate per card ($)"><input style={INP} type="number" step="0.01" placeholder="1.50" value={f[role==='setter'?'sRate':'cRate']} onChange={e=>s(role==='setter'?'sRate':'cRate',e.target.value)}/></Field>
-          </div>
-        </div>
-      ))}
-      {upfront!==null&&<div style={{background:'#E1F5EE',border:'0.5px solid #5DCAA5',borderRadius:'var(--border-radius-md)',padding:'11px 14px',marginBottom:'16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}><span style={{fontSize:'13px',color:'#0F6E56'}}>Total upfront owed at signing</span><span style={{fontFamily:'var(--font-mono)',fontWeight:'500',color:'#0F6E56',fontSize:'15px'}}>{fmt$(upfront)}</span></div>}
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+        <Field label="State"><input style={INP} value={f.state} onChange={e=>s('state',e.target.value)} placeholder="KY"/></Field>
+        <Field label="Contact / notes (optional)"><input style={INP} value={f.notes} onChange={e=>s('notes',e.target.value)}/></Field>
+      </div>
       <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
         <button style={BTN(false)} onClick={onClose}>Cancel</button>
-        <button style={BTN(true)} onClick={submit}>Create deal</button>
+        <button style={{...BTN(true),opacity:ok?1:0.5}} disabled={!ok} onClick={()=>ok&&onAdd({name:f.name.trim(),type:f.type,city:f.city.trim(),state:f.state.trim(),notes:f.notes.trim()})}>Add organization</button>
       </div>
     </ModalWrap>
   );
 }
 
-function DealRow({deal,employees,onClick}) {
-  const [hov,setHov]=useState(false);
-  const activated=deal.monthlyActivations.reduce((a,b)=>a+b,0);
-  const pct=deal.cardsOrdered>0?activated/deal.cardsOrdered:0;
-  const upfront=0.25*deal.cardsOrdered*(deal.setter.ratePerCard+deal.closer.ratePerCard);
-  const sName=employees.find(e=>e.id===deal.setter?.employeeId)?.name||deal.setter?.name||'—';
-  const cName=employees.find(e=>e.id===deal.closer?.employeeId)?.name||deal.closer?.name||'—';
-  return (
-    <div onClick={onClick} onMouseEnter={()=>setHov(true)} onMouseLeave={()=>setHov(false)}
-      style={{display:'flex',alignItems:'center',gap:'16px',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)',cursor:'pointer',background:hov?'var(--color-background-secondary)':'transparent',transition:'background 0.12s'}}>
-      <div style={{flex:1}}><div style={{fontWeight:'500',fontSize:'14px'}}>{deal.orgName}</div><div style={{fontSize:'12px',color:'var(--color-text-secondary)',marginTop:'2px'}}>{deal.cardsOrdered} cards · {sName} (setter) · {cName} (closer) · from {fmtYM(deal.startMonth)}</div></div>
-      <div style={{textAlign:'center',minWidth:'110px'}}><div style={{fontSize:'11px',color:'var(--color-text-secondary)',marginBottom:'4px'}}>Activated</div><div style={{fontFamily:'var(--font-mono)',fontSize:'13px'}}>{activated} / {deal.cardsOrdered}</div><div style={{width:'80px',height:'3px',background:'var(--color-border-tertiary)',borderRadius:'2px',margin:'5px auto 0'}}><div style={{width:`${Math.min(100,pct*100)}%`,height:'100%',background:'#1D9E75',borderRadius:'2px'}}/></div></div>
-      <div style={{textAlign:'right',minWidth:'90px'}}><div style={{fontSize:'11px',color:'var(--color-text-secondary)',marginBottom:'4px'}}>Upfront</div><Badge color="amber">{fmt$(upfront)}</Badge></div>
-      <ChevronRight size={15} color="var(--color-text-secondary)"/>
-    </div>
-  );
-}
-
-function DealsView({deals,employees,onSelect,onAdd}) {
-  const totalUp=deals.reduce((s,d)=>s+0.25*d.cardsOrdered*(d.setter.ratePerCard+d.closer.ratePerCard),0);
-  const totalBk=deals.reduce((s,d)=>{const a=d.monthlyActivations.reduce((x,y)=>x+y,0);return s+0.75*a*(d.setter.ratePerCard+d.closer.ratePerCard);},0);
+function OrgsView({orgs,onAdd,onDelete}) {
+  const [q,setQ]=useState('');
+  const ql=q.trim().toLowerCase();
+  const filtered=orgs.filter(o=>!ql||[o.name,o.city,o.state,o.type].some(v=>(v||'').toLowerCase().includes(ql)));
+  const distinct=key=>new Set(orgs.map(o=>(o[key]||'').toLowerCase().trim()).filter(Boolean)).size;
+  const byState={};
+  filtered.forEach(o=>{ const k=(o.state||'').trim()||'No state'; (byState[k]=byState[k]||[]).push(o); });
+  const states=Object.entries(byState).sort((a,b)=>a[0].localeCompare(b[0]));
   return (
     <div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px',marginBottom:'18px'}}>
-        <Metric label="Active deals" value={deals.length}/>
-        <Metric label="Upfront owed" value={fmt$(totalUp)} color="#854F0B"/>
-        <Metric label="Backend earned" value={fmt$(totalBk)} color="#0F6E56"/>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'18px',gap:'10px',flexWrap:'wrap'}}>
+        <div><h3 style={{margin:0,fontSize:'16px',fontWeight:'500'}}>Organizations</h3><div style={{fontSize:'13px',color:'var(--color-text-secondary)',marginTop:'2px'}}>Groups you work with — callers see who’s nearby while they’re on a call</div></div>
+        <button style={BTN(true)} onClick={onAdd}><Plus size={14}/>Add organization</button>
       </div>
-      <div style={CARD}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-          <span style={{fontWeight:'500',fontSize:'14px'}}>All deals</span>
-          <button style={BTN(true)} onClick={onAdd}><Plus size={14}/>New deal</button>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px',marginBottom:'16px'}}>
+        <Metric label="Organizations" value={orgs.length}/>
+        <Metric label="Cities covered" value={distinct('city')}/>
+        <Metric label="States covered" value={distinct('state')}/>
+      </div>
+      {orgs.length>0&&<input style={{...INP,marginBottom:'14px'}} placeholder="Search by name, city, state, or type…" value={q} onChange={e=>setQ(e.target.value)}/>}
+      {orgs.length===0?(
+        <div style={{...CARD,padding:'48px',textAlign:'center',color:'var(--color-text-secondary)'}}>
+          <Building2 size={32} style={{margin:'0 auto 12px',display:'block',opacity:0.4}}/>
+          <div style={{fontWeight:'500',marginBottom:'6px'}}>No organizations yet</div>
+          <div style={{fontSize:'13px',marginBottom:'16px'}}>Add the schools and groups you work with, and where they are</div>
+          <button style={BTN(true)} onClick={onAdd}><Plus size={14}/>Add first organization</button>
         </div>
-        {deals.length===0?(
-          <div style={{padding:'48px',textAlign:'center',color:'var(--color-text-secondary)'}}>
-            <FileText size={32} style={{margin:'0 auto 12px',display:'block',opacity:0.4}}/>
-            <div style={{fontWeight:'500',marginBottom:'6px'}}>No deals yet</div>
-            <div style={{fontSize:'13px',marginBottom:'16px'}}>Add employees first, then create deals</div>
-            <button style={BTN(true)} onClick={onAdd}><Plus size={14}/>Create deal</button>
+      ):states.map(([state,list])=>(
+        <div key={state} style={{...CARD,marginBottom:'12px'}}>
+          <div style={{padding:'10px 16px',borderBottom:'0.5px solid var(--color-border-tertiary)',background:'var(--color-background-secondary)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <span style={{fontWeight:'600',fontSize:'13px'}}>{state}</span>
+            <span style={{fontSize:'12px',color:'#64748b'}}>{list.length}</span>
           </div>
-        ):deals.map(d=><DealRow key={d.id} deal={d} employees={employees} onClick={()=>onSelect(d)}/>)}
-      </div>
-    </div>
-  );
-}
-
-function DealDetail({deal,employees,onBack,onUpdateActivation,onDelete}) {
-  const [editing,setEditing]=useState(null);
-  const [editVal,setEditVal]=useState('');
-  const activated=deal.monthlyActivations.reduce((a,b)=>a+b,0);
-  const sName=employees.find(e=>e.id===deal.setter?.employeeId)?.name||deal.setter?.name||'—';
-  const cName=employees.find(e=>e.id===deal.closer?.employeeId)?.name||deal.closer?.name||'—';
-  const reps=[
-    {label:'Appointment setter',name:sName,rep:deal.setter,up:0.25*deal.cardsOrdered*deal.setter.ratePerCard,bk:0.75*activated*deal.setter.ratePerCard,color:'amber'},
-    {label:'Closer',name:cName,rep:deal.closer,up:0.25*deal.cardsOrdered*deal.closer.ratePerCard,bk:0.75*activated*deal.closer.ratePerCard,color:'blue'}
-  ];
-  const save=idx=>{onUpdateActivation(deal.id,idx,editVal);setEditing(null);};
-  return (
-    <div>
-      <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'18px'}}>
-        <button style={BTN(false)} onClick={onBack}><ArrowLeft size={14}/>Back</button>
-        <div style={{flex:1}}><h2 style={{margin:0,fontSize:'18px',fontWeight:'500'}}>{deal.orgName}</h2><div style={{fontSize:'12px',color:'var(--color-text-secondary)'}}>{deal.cardsOrdered} cards · starts {fmtYM(deal.startMonth)}</div></div>
-        <button onClick={()=>onDelete(deal.id)} style={{...BTN(false),color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={13}/>Delete</button>
-      </div>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'12px',marginBottom:'18px'}}>
-        {reps.map(r=>(
-          <div key={r.label} style={CARD}>
-            <div style={{padding:'13px 16px',borderBottom:'0.5px solid var(--color-border-tertiary)',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <div><div style={{fontSize:'11px',color:'var(--color-text-secondary)',marginBottom:'2px'}}>{r.label}</div><div style={{fontWeight:'500'}}>{r.name}</div></div>
-              <Badge color={r.color}>{fmt$(r.rep.ratePerCard)}/card</Badge>
+          {list.map(o=>(
+            <div key={o.id} style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'12px',alignItems:'center',padding:'11px 16px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+              <div style={{minWidth:0}}><div style={{fontSize:'14px',fontWeight:'500'}}>{o.name}</div><div style={{fontSize:'12px',color:'#64748b'}}>{[o.city,o.notes].filter(Boolean).join(' · ')||'—'}</div></div>
+              {o.type?<Badge color="blue">{o.type}</Badge>:<span/>}
+              <button onClick={()=>onDelete(o.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
             </div>
-            <div style={{padding:'13px 16px',display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
-              {[{lbl:'Upfront (25%)',val:r.up,sub:'at signing',col:'#854F0B'},{lbl:'Backend (75%)',val:r.bk,sub:`${activated} activated`,col:'#0F6E56'}].map(x=>(
-                <div key={x.lbl} style={{background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'11px 12px'}}>
-                  <div style={{fontSize:'11px',color:'var(--color-text-secondary)',marginBottom:'4px'}}>{x.lbl}</div>
-                  <div style={{fontFamily:'var(--font-mono)',fontSize:'16px',fontWeight:'500',color:x.col}}>{fmt$(x.val)}</div>
-                  <div style={{fontSize:'11px',color:'var(--color-text-secondary)',marginTop:'2px'}}>{x.sub}</div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div style={CARD}>
-        <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><div style={{fontWeight:'500',fontSize:'14px'}}>Monthly activations</div><div style={{fontSize:'12px',color:'var(--color-text-secondary)',marginTop:'2px'}}>Click any month to update</div></div>
-        <div style={{padding:'16px',display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px'}}>
-          {deal.monthlyActivations.map((act,idx)=>{
-            const mYM=addMonths(deal.startMonth,idx);
-            const bk=0.75*act*(deal.setter.ratePerCard+deal.closer.ratePerCard);
-            const isEd=editing===idx;
-            return (
-              <div key={idx} onClick={()=>{if(!isEd){setEditing(idx);setEditVal(String(act));}}}
-                style={{background:'var(--color-background-secondary)',border:`0.5px solid ${act>0?'#5DCAA5':'var(--color-border-tertiary)'}`,borderRadius:'var(--border-radius-md)',padding:'12px',cursor:isEd?'default':'pointer',transition:'border-color 0.15s'}}>
-                <div style={{fontSize:'11px',color:'var(--color-text-secondary)',marginBottom:'6px',fontWeight:'500'}}>{fmtYM(mYM)}</div>
-                {isEd?(
-                  <div onClick={e=>e.stopPropagation()}>
-                    <input style={{...INP,marginBottom:'8px',padding:'6px 8px',fontSize:'13px'}} type="number" value={editVal} autoFocus onChange={e=>setEditVal(e.target.value)} onKeyDown={e=>e.key==='Enter'&&save(idx)}/>
-                    <div style={{display:'flex',gap:'5px'}}>
-                      <button style={{...BTN(true),flex:1,padding:'5px 6px',fontSize:'12px',justifyContent:'center'}} onClick={()=>save(idx)}>Save</button>
-                      <button style={{...BTN(false),flex:1,padding:'5px 6px',fontSize:'12px',justifyContent:'center'}} onClick={()=>setEditing(null)}>✕</button>
-                    </div>
-                  </div>
-                ):(
-                  <>
-                    <div style={{fontFamily:'var(--font-mono)',fontSize:'22px',fontWeight:'500',color:act>0?'#0F6E56':'var(--color-text-secondary)'}}>{act}</div>
-                    <div style={{fontSize:'11px',color:'var(--color-text-secondary)',marginTop:'2px'}}>cards</div>
-                    {act>0&&<div style={{marginTop:'8px',paddingTop:'8px',borderTop:'0.5px solid var(--color-border-tertiary)',fontSize:'11px',color:'#0F6E56',fontFamily:'var(--font-mono)'}}>+{fmt$(bk)}</div>}
-                  </>
-                )}
-              </div>
-            );
-          })}
+          ))}
         </div>
-      </div>
+      ))}
     </div>
   );
 }
@@ -1210,7 +1128,7 @@ const NoteField = ({note,setNote}) => (
   <Field label="Add a note"><textarea style={{...INP,minHeight:'58px',resize:'vertical'}} placeholder="What happened on the call?" value={note} onChange={e=>setNote(e.target.value)}/></Field>
 );
 
-function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onClose }) {
+function LogCallModal({ call, callerName, orgs=[], onUpdateCall, onAddRecordingTake, onClose }) {
   const [outcome,setOutcome]=useState(null);
   const [submittedTake,setSubmittedTake]=useState(call.submittedTake??null);
   const [dm,setDm]=useState(call.decisionMaker||{title:'',firstName:'',lastName:''});
@@ -1243,6 +1161,9 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
   // Profile header bits + the rest of what we already know about this lead
   const leadAddress=(call.addresses?.map(addrLine).filter(Boolean).join(' • '))||call.location||'';
   const leadSchool=call.school||'';
+  // Organizations we already work with near this merchant — great trust-builder on the call
+  const lc=leadCity(call).toLowerCase(), ls=leadState(call).toLowerCase();
+  const nearbyOrgs=(orgs||[]).filter(o=>{ const oc=(o.city||'').toLowerCase().trim(), os=(o.state||'').toLowerCase().trim(); return (oc&&oc===lc)||(os&&os===ls); }).slice(0,10);
   const leadInfo=[
     ['Contact', call.contact||call.spokeTo],
     ['Phone', call.phone],
@@ -1330,6 +1251,16 @@ function LogCallModal({ call, callerName, onUpdateCall, onAddRecordingTake, onCl
         )}
         {call.notes&&<div style={{background:'var(--color-background-primary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px',fontSize:'12px',color:'#0f172a',whiteSpace:'pre-wrap',margin:'12px 0 0',lineHeight:1.5}}><b style={{color:'#64748b'}}>Notes</b><br/>{call.notes}</div>}
       </div>
+
+      {nearbyOrgs.length>0&&(
+        <div style={{background:'var(--color-background-info)',border:'0.5px solid var(--color-border-info)',borderRadius:'var(--border-radius-lg)',padding:'14px 16px',marginBottom:'16px'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',fontWeight:'600',color:'#185FA5',marginBottom:'8px'}}><MapPin size={13}/>Groups we already work with near {leadCity(call)}</div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:'6px'}}>
+            {nearbyOrgs.map(o=><span key={o.id} style={{fontSize:'12px',padding:'3px 10px',background:'#fff',border:'0.5px solid var(--color-border-info)',borderRadius:'100px',color:'#0f172a'}}>{o.name}{o.type?` · ${o.type}`:''}{o.city?` · ${o.city}`:''}</span>)}
+          </div>
+          <div style={{fontSize:'11px',color:'#64748b',marginTop:'8px'}}>Mention these to build trust — “we already partner with a few groups right by you.”</div>
+        </div>
+      )}
 
       {/* Outcome buttons — the very first action */}
       <div style={{fontWeight:'600',fontSize:'16px',margin:'0 0 12px'}}>How did the call go?</div>
@@ -2032,7 +1963,7 @@ export default function TailgatePayday() {
   const [employees,setEmployees]=useState([]);
   const [deals,setDeals]=useState([]);
   const [assignments,setAssignments]=useState([]);
-  const [selectedDeal,setSelectedDeal]=useState(null);
+  const [orgs,setOrgs]=useState([]);
   const [loading,setLoading]=useState(true);
   const [modal,setModal]=useState(null);
   const [calls,setCalls]=useState([]);
@@ -2052,8 +1983,8 @@ export default function TailgatePayday() {
   // Data load
   useEffect(()=>{
     if(!session) return;
-    Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn'),loadS('po_calls'),loadS('po_signups')]).then(([e,d,a,c,s])=>{
-      setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setCalls(Array.isArray(c)?c:[]); setSignups(Array.isArray(s)?s:[]); setLoading(false);
+    Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn'),loadS('po_calls'),loadS('po_signups'),loadS('po_orgs')]).then(([e,d,a,c,s,o])=>{
+      setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setCalls(Array.isArray(c)?c:[]); setSignups(Array.isArray(s)?s:[]); setOrgs(Array.isArray(o)?o:[]); setLoading(false);
     });
   },[session]);
 
@@ -2062,6 +1993,9 @@ export default function TailgatePayday() {
   const setA=v=>{setAssignments(v);saveS('po_asgn',v);};
   const setC=v=>{setCalls(v);saveS('po_calls',v);};
   const setSU=v=>{setSignups(v);saveS('po_signups',v);};
+  const setO=v=>{setOrgs(v);saveS('po_orgs',v);};
+  const addOrg=o=>{ setO([...orgs,{...o,id:genId(),createdAt:new Date().toISOString()}]); setModal(null); };
+  const deleteOrg=id=>setO(orgs.filter(o=>o.id!==id));
   // A signed-in user with no roster match — log it once so the admin can add them
   const requestAccess=email=>{
     const em=(email||'').toLowerCase();
@@ -2103,9 +2037,6 @@ export default function TailgatePayday() {
 
   const addEmployee=(name,email)=>{ setE([...employees,{id:genId(),name,email:email||'',createdAt:new Date().toISOString()}]); if(email) setSU(signups.filter(s=>s.email.toLowerCase()!==email.toLowerCase())); setModal(null); };
   const deleteEmployee=id=>setE(employees.filter(e=>e.id!==id));
-  const addDeal=deal=>{ setD([...deals,{...deal,id:genId(),createdAt:new Date().toISOString(),monthlyActivations:Array(12).fill(0),paid:{setterUpfront:false,closerUpfront:false,setterBackend:Array(12).fill(false),closerBackend:Array(12).fill(false)}}]); setModal(null); };
-  const updateActivation=(dealId,idx,val)=>{ const u=deals.map(d=>{if(d.id!==dealId) return d; const ma=[...d.monthlyActivations]; ma[idx]=Math.max(0,+val||0); return {...d,monthlyActivations:ma};}); setD(u); setSelectedDeal(u.find(d=>d.id===dealId)||null); };
-  const deleteDeal=id=>{ setD(deals.filter(d=>d.id!==id)); setSelectedDeal(null); };
   const addPeriod=(empId,period)=>{ const ex=assignments.find(a=>a.employeeId===empId); if(ex) setA(assignments.map(a=>a.employeeId!==empId?a:{...a,periods:[...a.periods,{...period,id:genId(),paid:false}]})); else setA([...assignments,{id:genId(),employeeId:empId,periods:[{...period,id:genId(),paid:false}]}]); setModal(null); };
   const togglePeriodPaid=(aId,pId)=>setA(assignments.map(a=>a.id!==aId?a:{...a,periods:a.periods.map(p=>p.id!==pId?p:{...p,paid:!p.paid})}));
   const deletePeriod=(aId,pId)=>setA(assignments.map(a=>a.id!==aId?a:{...a,periods:a.periods.filter(p=>p.id!==pId)}).filter(a=>a.periods.length>0));
@@ -2129,9 +2060,9 @@ export default function TailgatePayday() {
   if(recovery) return <ResetPasswordPage onDone={()=>setRecovery(false)} onCancel={()=>{setRecovery(false);signOut();}}/>;
   if(!session) return <LoginPage/>;
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#64748b',fontSize:'14px'}}>Loading…</div>;
-  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess}/>;
+  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess}/>;
 
-  const TABS=[['employees','Employees',Users],['deals','Deals',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
+  const TABS=[['employees','Employees',Users],['orgs','Organizations',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
 
   return (
     <div style={{padding:'20px',maxWidth:'980px',margin:'0 auto',fontFamily:'var(--font-sans)'}}>
@@ -2140,15 +2071,15 @@ export default function TailgatePayday() {
         <div style={{display:'flex',alignItems:'center',gap:'9px'}}><span style={{fontSize:'17px',fontWeight:'500'}}>Tailgate Payday</span></div>
         <div style={{display:'flex',background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'3px',border:'0.5px solid var(--color-border-tertiary)',gap:'2px'}}>
           {TABS.map(([key,label,Icon])=>(
-            <button key={key} onClick={()=>{setTab(key);setSelectedDeal(null);}} style={{display:'inline-flex',alignItems:'center',gap:'5px',padding:'6px 13px',borderRadius:'var(--border-radius-md)',border:'none',cursor:'pointer',fontSize:'13px',fontFamily:'var(--font-sans)',fontWeight:'500',background:tab===key?'var(--color-background-primary)':'transparent',color:tab===key?'var(--color-text-primary)':'var(--color-text-secondary)',boxShadow:tab===key?'0 0.5px 2px rgba(0,0,0,0.1)':'none'}}>
+            <button key={key} onClick={()=>setTab(key)} style={{display:'inline-flex',alignItems:'center',gap:'5px',padding:'6px 13px',borderRadius:'var(--border-radius-md)',border:'none',cursor:'pointer',fontSize:'13px',fontFamily:'var(--font-sans)',fontWeight:'500',background:tab===key?'var(--color-background-primary)':'transparent',color:tab===key?'var(--color-text-primary)':'var(--color-text-secondary)',boxShadow:tab===key?'0 0.5px 2px rgba(0,0,0,0.1)':'none'}}>
               <Icon size={13}/>{label}
             </button>
           ))}
         </div>
         <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
-          {['employees','deals','reps','calls'].includes(tab)&&(
-            <button style={BTN(true)} onClick={()=>setModal({type:tab==='employees'?'addEmp':tab==='deals'?'addDeal':tab==='calls'?'addCall':'addPeriod'})}>
-              <Plus size={14}/>{tab==='employees'?'Employee':tab==='deals'?'Deal':tab==='calls'?'Assign call':'Period'}
+          {['employees','orgs','reps','calls'].includes(tab)&&(
+            <button style={BTN(true)} onClick={()=>setModal({type:tab==='employees'?'addEmp':tab==='orgs'?'addOrg':tab==='calls'?'addCall':'addPeriod'})}>
+              <Plus size={14}/>{tab==='employees'?'Employee':tab==='orgs'?'Organization':tab==='calls'?'Assign call':'Period'}
             </button>
           )}
           <button style={{...BTN(false),padding:'7px 10px'}} onClick={exportAll} title="Export a backup"><Download size={14}/></button>
@@ -2157,14 +2088,14 @@ export default function TailgatePayday() {
       </div>
 
       {tab==='employees'&&<EmployeesView employees={employees} deals={deals} assignments={assignments} signups={signups} onAdd={()=>setModal({type:'addEmp'})} onAddRequest={email=>setModal({type:'addEmp',data:{email}})} onDismissRequest={dismissSignup} onDelete={deleteEmployee}/>}
-      {tab==='deals'&&(selectedDeal?<DealDetail deal={selectedDeal} employees={employees} onBack={()=>setSelectedDeal(null)} onUpdateActivation={updateActivation} onDelete={deleteDeal}/>:<DealsView deals={deals} employees={employees} onSelect={setSelectedDeal} onAdd={()=>setModal({type:'addDeal'})}/>)}
+      {tab==='orgs'&&<OrgsView orgs={orgs} onAdd={()=>setModal({type:'addOrg'})} onDelete={deleteOrg}/>}
       {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onImportCSV={()=>setModal({type:'importCSV'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
       {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
       {tab==='payroll'&&<PayrollView employees={employees} deals={deals} assignments={assignments}/>}
       {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})}/>}
 
       {modal?.type==='addEmp'&&<AddEmployeeModal initialEmail={modal.data?.email} onAdd={addEmployee} onClose={()=>setModal(null)}/>}
-      {modal?.type==='addDeal'&&<AddDealModal employees={employees} onAdd={addDeal} onClose={()=>setModal(null)}/>}
+      {modal?.type==='addOrg'&&<AddOrgModal onAdd={addOrg} onClose={()=>setModal(null)}/>}
       {modal?.type==='addPeriod'&&<AddPeriodModal employees={employees} onAdd={addPeriod} onClose={()=>setModal(null)}/>}
       {modal?.type==='importCSV'&&<CSVImportModal employees={employees} assignments={assignments} onSave={updated=>{setA(updated);setModal(null);}} onClose={()=>setModal(null)}/>}
       {modal?.type==='payStub'&&<PayStubModal emp={modal.data.emp} period={modal.data.p} onClose={()=>setModal(null)}/>}
