@@ -43,6 +43,9 @@ const addMonths = (ym,n) => { if(!ym) return ''; let [y,m]=ym.split('-').map(Num
 const fmtYM = ym => { if(!ym) return ''; const [y,m]=ym.split('-').map(Number); return `${SM[m-1]} ${y}`; };
 const today = () => new Date().toISOString().split('T')[0];
 const addDays = (date,n) => { const d=new Date(date); d.setDate(d.getDate()+n); return d.toISOString().split('T')[0]; };
+// Whole days from today until a YYYY-MM-DD date (positive = future, negative = overdue)
+const daysUntil = d => d ? Math.round((new Date(d+'T00:00:00') - new Date(today()+'T00:00:00'))/86400000) : null;
+const GROUP_DEADLINE_DAYS = 7; // every imported group should be finished within a week
 const fmtDate = s => { if(!s) return ''; const [y,m,d]=s.split('-'); return `${SM[+m-1]} ${+d}, ${y}`; };
 const fmtTime = t => { if(!t) return ''; const [h,m]=t.split(':').map(Number); const ap=h<12?'AM':'PM'; return `${h%12||12}:${String(m).padStart(2,'0')} ${ap}`; };
 const fmtDateTime = (d,t) => d ? `${fmtDate(d)}${t?` at ${fmtTime(t)}`:''}` : '';
@@ -1434,6 +1437,48 @@ function LeadRow({ c, onOpenLog }) {
   );
 }
 
+// Per-group progress toward the 7-day finish goal (min lead date + 7 days)
+const computeGroupStats = list => {
+  const map={};
+  list.forEach(c=>{ const g=c.group||'Other'; (map[g]=map[g]||[]).push(c); });
+  return Object.entries(map).map(([group,items])=>{
+    const total=items.length;
+    const called=items.filter(leadContacted).length;
+    const start=items.map(c=>(c.createdAt||'').split('T')[0]).filter(Boolean).sort()[0]||today();
+    const due=addDays(start,GROUP_DEADLINE_DAYS);
+    return {group,total,called,pct:total?Math.round(called/total*100):0,due,left:daysUntil(due)};
+  }).sort((a,b)=>(a.pct-b.pct)||((a.left??0)-(b.left??0)));
+};
+function GroupProgressCard({ calls }) {
+  const stats=computeGroupStats(calls);
+  const rows=stats.some(s=>s.group!=='Other')?stats.filter(s=>s.group!=='Other'):stats;
+  if(rows.length===0) return null;
+  return (
+    <div style={{...CARD,marginBottom:'14px'}}>
+      <div style={{padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'600',fontSize:'14px'}}>Group goals</span><span style={{fontSize:'12px',color:'#64748b',marginLeft:'8px'}}>finish each within {GROUP_DEADLINE_DAYS} days</span></div>
+      {rows.map(s=>{
+        const done=s.pct>=100, overdue=!done&&s.left<0, soon=!done&&s.left>=0&&s.left<=2;
+        const barCol=done?'#1D9E75':overdue?'#A32D2D':soon?'#EF9F27':'#1D9E75';
+        const dueLabel=done?'Done 🎉':overdue?`${-s.left}d overdue`:s.left===0?'Due today':`${s.left}d left`;
+        const dueCol=done?'#0F6E56':overdue?'#A32D2D':soon?'#854F0B':'#185FA5';
+        return (
+          <div key={s.group} style={{padding:'12px 18px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'7px'}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:'500',fontSize:'14px'}}>{s.group}</div>
+                <div style={{fontSize:'12px',color:'#64748b'}}>{s.called} of {s.total} called · {s.total-s.called} left</div>
+              </div>
+              <span style={{fontSize:'12px',fontWeight:'700',color:dueCol,whiteSpace:'nowrap'}}>{dueLabel}</span>
+              <span style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:done?'#0F6E56':'#0f172a',minWidth:'38px',textAlign:'right'}}>{s.pct}%</span>
+            </div>
+            <div style={{height:'8px',background:'var(--color-border-tertiary)',borderRadius:'4px',overflow:'hidden'}}><div style={{width:`${Math.min(100,s.pct)}%`,height:'100%',background:barCol,borderRadius:'4px',transition:'width 0.3s'}}/></div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CallerHome({ myCalls, onOpenLog }) {
   const t=today();
   const [area,setArea]=useState('all');
@@ -1490,6 +1535,8 @@ function CallerHome({ myCalls, onOpenLog }) {
           <option value="area">Sort: Location</option>
         </select>
       </div>
+
+      <GroupProgressCard calls={myCalls}/>
 
       <div style={{...CARD,marginBottom:'14px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
@@ -1824,6 +1871,9 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
           <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>No leads yet. Use “Import leads” or “Assign call” to add some.</div>
         ):areas.map(a=>{
           const pct=a.total?Math.round(a.called/a.total*100):0; const open=openState===a.state;
+          const start=a.list.map(c=>(c.createdAt||'').split('T')[0]).filter(Boolean).sort()[0];
+          const left=(groupBy==='group'&&start)?daysUntil(addDays(start,GROUP_DEADLINE_DAYS)):null;
+          const done=pct>=100;
           return (
             <div key={a.state} style={{borderTop:'0.5px solid var(--color-border-tertiary)'}}>
               <div onClick={()=>setOpenState(open?'':a.state)} style={{padding:'12px 18px',cursor:'pointer'}}>
@@ -1832,6 +1882,7 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
                     <div style={{fontWeight:'500',fontSize:'14px'}}>{a.state}</div>
                     <div style={{fontSize:'12px',color:'#64748b'}}>{a.called} of {a.total} called · {a.total-a.called} left</div>
                   </div>
+                  {left!=null&&!done&&<span style={{fontSize:'12px',fontWeight:'700',color:left<0?'#A32D2D':left<=2?'#854F0B':'#185FA5',whiteSpace:'nowrap'}}>{left<0?`${-left}d overdue`:left===0?'Due today':`${left}d left`}</span>}
                   <div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:pct>=50?'#0F6E56':'#854F0B'}}>{pct}%</div>
                   {open?<ChevronUp size={15} color="var(--color-text-secondary)"/>:<ChevronDown size={15} color="var(--color-text-secondary)"/>}
                 </div>
