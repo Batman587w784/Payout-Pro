@@ -1119,6 +1119,7 @@ const BUSINESS_TYPES = ['Fast food','Pizza','Casual dining','Bakery/coffee shop'
 // What a call is worth (caller payout) — $5 to $75 in $5 steps
 const PAYOUT_AMOUNTS = Array.from({length:15},(_,i)=>(i+1)*5);
 const leadValue = c => { if(c?.value!=null&&c.value!=='') return +c.value||0; const d=(c?.discount||'').toString().replace(/[^0-9.]/g,''); return d?+d:0; };
+const parseMoney = s => { const n=parseFloat((s==null?'':s).toString().replace(/[^0-9.]/g,'')); return isNaN(n)?0:n; };
 // Multi-caller pool + claim model: a lead can be shared with several callers until one
 // logs an outcome ("claims" it); after that only the claimer sees it.
 const leadPool = c => (c?.callerIds&&c.callerIds.length) ? c.callerIds : (c?.callerId ? [c.callerId] : []);
@@ -1950,14 +1951,16 @@ const LEAD_FIELDS = [
   ['state','State',false],
   ['category','Category / business type',false],
   ['school','School',false],
+  ['value','Payout per call ($)',false],
   ['additionalInfo','Additional info',false],
   ['notes','Notes',false],
 ];
 const LEAD_GUESS = {
   business:/business|company|organi|name of|account/i, contact:/contact|owner|decision|\brep\b|first name|person|manager/i,
-  phone:/phone|tel|mobile|cell|number/i, email:/e-?mail/i, street:/address|street|addr/i, city:/city|town/i,
+  phone:/phone|tel|mobile|cell/i, email:/e-?mail/i, street:/address|street|addr/i, city:/city|town/i,
   state:/state|region|province/i, category:/categor|type|industry|service|vertical/i, school:/school|institution|district|college|university/i,
-  additionalInfo:/additional|info|detail|specific|note/i, notes:/note|comment|remark/i,
+  value:/payout|reward|worth|call value|per[- ]?call|price/i,
+  additionalInfo:/additional|info|detail|specific/i, notes:/note|comment|remark/i,
 };
 
 function LeadImportModal({ employees, onImport, onClose }) {
@@ -1988,7 +1991,8 @@ function LeadImportModal({ employees, onImport, onClose }) {
       business:get(r,'business'), contact:get(r,'contact'), phone:get(r,'phone'), email:get(r,'email'),
       location:[addr.city,addr.state].filter(Boolean).join(', '), addresses:hasAddr?[addr]:[],
       category:get(r,'category'), businessType:get(r,'category'), school:get(r,'school'),
-      additionalInfo:get(r,'additionalInfo'), notes:get(r,'notes'), value:batchValue||0, group:group.trim(),
+      additionalInfo:get(r,'additionalInfo'), notes:get(r,'notes'), group:group.trim(),
+      value:(map.value?parseMoney(get(r,'value')):0)||batchValue||0,
     };
   };
   const validRows=rows.filter(r=>map.business&&(r[map.business]||'').toString().trim());
@@ -2011,7 +2015,7 @@ function LeadImportModal({ employees, onImport, onClose }) {
       <div style={{marginBottom:'12px'}}><Field label="Calling for (group / organization) — shown to callers"><input style={INP} value={group} onChange={e=>setGroup(e.target.value)} placeholder="e.g. South Carolina IFC"/></Field></div>
       <div style={{marginBottom:'12px'}}><MultiEmpPicker employees={employees} value={callerIds} onChange={setCallerIds} label="Assign these leads to caller(s) — tap to add more"/></div>
       <div style={{marginBottom:'12px'}}>
-        <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>Payout per call for this batch (what the caller earns){batchValue?` — $${batchValue}`:' — optional, can set per-lead later'}</label>
+        <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>{map.value?'Fallback payout — used only for rows where your “Payout per call” column is blank':'Standard payout for this whole batch (or map a “Payout per call” column below for per-lead amounts)'}{batchValue?` — $${batchValue}`:''}</label>
         <ValuePicker value={batchValue} onChange={setBatchValue}/>
       </div>
       <div style={{fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'8px'}}>Match each field to a column from your file. We guessed where we could.</div>
@@ -2032,6 +2036,7 @@ function LeadImportModal({ employees, onImport, onClose }) {
           {validRows.slice(0,5).map((r,i)=>{const b=build(r);return (
             <div key={i} style={{padding:'8px 12px',borderTop:'0.5px solid var(--color-border-tertiary)',fontSize:'12px'}}>
               <span style={{fontWeight:'500'}}>{b.business||'—'}</span>
+              {b.value>0&&<span style={{fontWeight:'700',color:'#0F6E56',marginLeft:'8px'}}>${b.value}</span>}
               <span style={{color:'var(--color-text-secondary)'}}>{[b.contact,b.phone,b.email,[b.addresses[0]?.city,b.addresses[0]?.state].filter(Boolean).join(', ')].filter(Boolean).length?' — '+[b.contact,b.phone,b.email,[b.addresses[0]?.city,b.addresses[0]?.state].filter(Boolean).join(', ')].filter(Boolean).join(' · '):''}</span>
             </div>
           );})}
