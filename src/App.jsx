@@ -313,7 +313,7 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,userEmail,onSign
         {screen==='crm'&&<CallerCRM myCalls={myCalls} onOpenLog={c=>setLogId(c.id)} onWorkQueue={()=>setScreen('home')}/>}
         {screen==='payouts'&&<CallerPayouts emp={emp} deals={deals} assignments={assignments}/>}
       </div>
-      {logCall&&<LogCallModal call={logCall} callerName={emp.name} myCallerId={emp.id} orgs={orgs} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake} onClose={()=>setLogId('')}/>}
+      {logCall&&<LogCallModal call={logCall} callerName={emp.name} callerEmail={emp.email} myCallerId={emp.id} orgs={orgs} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake} onClose={()=>setLogId('')}/>}
     </div>
   );
 }
@@ -1158,7 +1158,7 @@ const NoteField = ({note,setNote}) => (
   <Field label="Add a note"><textarea style={{...INP,minHeight:'58px',resize:'vertical'}} placeholder="What happened on the call?" value={note} onChange={e=>setNote(e.target.value)}/></Field>
 );
 
-function LogCallModal({ call, callerName, myCallerId, orgs=[], onUpdateCall, onAddRecordingTake, onClose }) {
+function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUpdateCall, onAddRecordingTake, onClose }) {
   const [outcome,setOutcome]=useState(null);
   const [submittedTake,setSubmittedTake]=useState(call.submittedTake??null);
   const [dm,setDm]=useState(call.decisionMaker||{title:'',firstName:'',lastName:''});
@@ -1172,9 +1172,13 @@ function LogCallModal({ call, callerName, myCallerId, orgs=[], onUpdateCall, onA
   const [cbDate,setCbDate]=useState(call.callbackDate||addDays(today(),2));
   const [cbTime,setCbTime]=useState(call.callbackTime||'');
   const [note,setNote]=useState('');
-  const [emailSubject,setEmailSubject]=useState(`More info from Tailgate Fundraising${call.business?` — ${call.business}`:''}`);
-  const [emailBody,setEmailBody]=useState(`Hi${call.contact?` ${call.contact}`:''},\n\nGreat speaking with you today! As promised, here's a bit more about partnering with Tailgate Fundraising${call.business?` for ${call.business}`:''}.\n\n[Add any specific details you discussed here.]\n\nWhenever you're ready, just use the sign-up link below to get on the card. Any questions, reply right here.`);
+  const initFirst=(call.decisionMaker?.firstName)||(call.spokeTo||call.contact||'').trim().split(/\s+/)[0]||'there';
+  const initBiz=call.business||'your business';
+  const [emailSubject,setEmailSubject]=useState(`${initFirst!=='there'?initFirst+' - ':''}${initBiz} info from Tailgate Fundraising`);
+  const [emailBody,setEmailBody]=useState(`Hi ${initFirst},\n\nGreat speaking with you today. As promised, here's a bit more about partnering with Tailgate Fundraising for ${initBiz}.\n\nHere's the short version of what this looks like for you:\n\nThere is no cost to you. No fee, no commitment, nothing to buy. You offer a discount to cardholders, and your team honors it in person when someone shows the card. That's the whole ask.\n\nWhat you get is exposure to everyone supporting the cause. Every family, student, and supporter who buys a card sees your business on it, and they carry it with them. Most local advertising asks you to pay and hope. This puts you in front of people who are already choosing where to spend locally, and it ties your name to something the community cares about.\n\nIt also drives foot traffic rather than impressions. A card in someone's wallet is a reason to walk in your door instead of driving past.\n\nLater this month we're launching a reporting dashboard, so you'll be able to see how your offer is actually performing, similar to what you'd expect from Google Analytics. Redemptions, traffic, and how you compare to other partners on the card. You'll get access as soon as it goes live.\n\nWhenever you're ready, just use the sign-up link below to get on the card. Any questions, reply right here.`);
   const [emailed,setEmailed]=useState(false);
+  const [sending,setSending]=useState(false);
+  const [emailErr,setEmailErr]=useState('');
 
   const setDmF=(k,v)=>setDm(d=>({...d,[k]:v}));
   const setAddr=(i,k,v)=>setAddresses(a=>a.map((x,j)=>j===i?{...x,[k]:v}:x));
@@ -1208,12 +1212,22 @@ function LogCallModal({ call, callerName, myCallerId, orgs=[], onUpdateCall, onA
   const withNote=base=>note.trim()?((base?base+'\n\n':'')+`${today()}: ${note.trim()}`):base;
   // Logging any outcome claims the lead for this caller (removes it from other callers' pool)
   const commit=patch=>{ onUpdateCall(call.id,{...patch, ...(myCallerId?{callerId:myCallerId}:{}), notes:withNote(call.notes||'')}); onClose(); };
-  // Info email — opens the caller's mail app with an editable draft; the personalized
+  // Info email — one-click server send via Resend (Supabase Edge Function). The personalized
   // Zoho sign-up link (merchant name + email pre-filled) and the caller's name are auto-appended.
   const emailTo=email||call.email;
   const merchantName=[dm.firstName,dm.lastName].filter(Boolean).join(' ')||spokeTo||call.contact||'';
-  const fullEmailBody=()=>`${emailBody}\n\nSign up to get on the card here:\n${signupLink(merchantName,emailTo)}\n\n— ${callerName}\nTailgate Fundraising`;
-  const openEmail=()=>{ window.location.href=`mailto:${encodeURIComponent(emailTo||'')}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(fullEmailBody())}`; setEmailed(true); };
+  const fullEmailBody=()=>`${emailBody}\n\n${signupLink(merchantName,emailTo)}\n\nThanks,\n${callerName}`;
+  const sendEmail=async()=>{
+    setSending(true); setEmailErr('');
+    try{
+      const {data,error}=await supabase.functions.invoke('send-info-email',{body:{to:emailTo,subject:emailSubject,text:fullEmailBody(),replyTo:callerEmail||undefined}});
+      if(error) throw error;
+      if(data&&data.error) throw new Error(data.error);
+      setEmailed(true);
+    }catch(e){ setEmailErr('Couldn’t send automatically ('+(e.message||e)+'). Tap below to send from your own email app instead.'); }
+    finally{ setSending(false); }
+  };
+  const openMailto=()=>{ window.location.href=`mailto:${encodeURIComponent(emailTo||'')}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(fullEmailBody())}`; setEmailed(true); };
 
   const save=()=>{
     const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
@@ -1344,15 +1358,21 @@ function LogCallModal({ call, callerName, myCallerId, orgs=[], onUpdateCall, onA
                 <Field label="Subject"><input style={INP} value={emailSubject} onChange={e=>setEmailSubject(e.target.value)}/></Field>
                 <Field label="Message (edit anything — add the specific details you discussed)"><textarea style={{...INP,minHeight:'120px',resize:'vertical'}} value={emailBody} onChange={e=>setEmailBody(e.target.value)}/></Field>
                 <div style={{background:'var(--color-background-secondary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px',fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>
-                  Auto-added to the bottom (can’t be changed): the sign-up link (with {merchantName||'their name'} + their email pre-filled) and your name, <b style={{color:'#0f172a'}}>{callerName}</b>.
+                  Auto-added to the bottom (can’t be changed): the sign-up link (with {merchantName||'their name'} + their email pre-filled) and your name, <b style={{color:'#0f172a'}}>{callerName}</b>. Replies come back to you.
                 </div>
-                {emailed&&<div style={{fontSize:'12px',color:'#0F6E56',marginBottom:'10px',fontWeight:'500'}}>Draft opened in your email app — send it there, then Save below.</div>}
-                <button style={{...BTN(true),width:'100%',justifyContent:'center',marginBottom:'8px'}} onClick={openEmail}><FileText size={14}/>Open email to send</button>
+                {emailed?(
+                  <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'13px',color:'#0F6E56',marginBottom:'10px',fontWeight:'600'}}><CheckCircle size={14}/>Sent to {emailTo}. Now Save below.</div>
+                ):(
+                  <button style={{...BTN(true),width:'100%',justifyContent:'center',marginBottom:'8px',opacity:sending?0.7:1}} disabled={sending} onClick={sendEmail}><FileText size={14}/>{sending?'Sending…':'Send info email'}</button>
+                )}
+                {emailErr&&<div style={{fontSize:'12px',color:'#A32D2D',marginBottom:'8px'}}>{emailErr}</div>}
+                {emailErr&&<button style={{...BTN(false),width:'100%',justifyContent:'center',marginBottom:'8px'}} onClick={openMailto}>Open in my email app instead</button>}
               </>
             ):(
               <div style={{fontSize:'13px',color:'#854F0B',marginBottom:'12px'}}>Add their email in the details above to send them the info.</div>
             )}
           </div>
+          {emailTo&&!emailed&&<div style={{fontSize:'12px',color:'#854F0B',marginBottom:'8px',fontWeight:'500'}}>Send the info email above before you save.</div>}
           <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save — needs more info</button>
         </div>
       )}
