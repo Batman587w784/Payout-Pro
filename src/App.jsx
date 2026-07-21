@@ -14,8 +14,10 @@ const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env
 const ADMIN_EMAIL = 'shuffman@tailgateofficial.com';
 const APP_NAME = 'Tailgate Payday';
 const APP_TAGLINE = 'Tailgate Official Payout Management';
-// Fixed sign-up form the merchant uses to get on the card (callers can't change this)
-const SIGNUP_FORM_URL = 'https://JoinTailgate.com';
+// Fixed sign-up form the merchant uses to get on the card (callers can't change this).
+// The merchant's name + email are auto-filled into the Zoho link.
+const SIGNUP_FORM_BASE = 'https://sign.zoho.com/zsfl/me6QHiMds18lYnMe0ILA?i=9923';
+const signupLink = (name,email) => `${SIGNUP_FORM_BASE}&recipient_name=${encodeURIComponent(name||'')}&recipient_email=${encodeURIComponent(email||'')}`;
 
 // ─── Storage ──────────────────────────────────────────────────────
 // Saves instantly to localStorage (so nothing is ever lost on tab switch)
@@ -144,6 +146,22 @@ const EmpPicker = ({employees,value,onChange,label}) => (
   </Field>
 );
 
+// Assign to one or more callers (toggle chips)
+const MultiEmpPicker = ({employees,value=[],onChange,label}) => (
+  <Field label={label||'Assign to callers'}>
+    {employees.length===0?(
+      <div style={{fontSize:'12px',color:'var(--color-text-secondary)'}}>Add employees first.</div>
+    ):(
+      <div style={{display:'flex',flexWrap:'wrap',gap:'6px'}}>
+        {employees.map(e=>{ const on=value.includes(e.id); return (
+          <button key={e.id} type="button" onClick={()=>onChange(on?value.filter(x=>x!==e.id):[...value,e.id])}
+            style={{padding:'6px 12px',cursor:'pointer',fontFamily:'var(--font-sans)',fontSize:'12px',fontWeight:'500',borderRadius:'100px',border:`1px solid ${on?'#5DCAA5':'var(--color-border-tertiary)'}`,background:on?'#E1F5EE':'var(--color-background-primary)',color:on?'#0F6E56':'#0f172a'}}>{e.name}</button>
+        );})}
+      </div>
+    )}
+  </Field>
+);
+
 // ─── LOGIN PAGE ───────────────────────────────────────────────────
 function LoginPage() {
   const [mode,setMode]=useState('signin');
@@ -264,7 +282,7 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,userEmail,onSign
     </div>
   );
 
-  const myCalls = calls.filter(c=>c.callerId===emp.id);
+  const myCalls = calls.filter(c=>leadVisibleTo(c,emp.id));
   const queueCount = myCalls.filter(c=>c.status==='to_call'||c.status==='callback'||c.status==='no_answer').length;
   const logCall = myCalls.find(c=>c.id===logId); // derived fresh so recordings update live
   const TABS=[['home','My Leads',Building2],['crm','CRM',Users],['payouts','Payouts',DollarSign]];
@@ -292,7 +310,7 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,userEmail,onSign
         {screen==='crm'&&<CallerCRM myCalls={myCalls} onOpenLog={c=>setLogId(c.id)} onWorkQueue={()=>setScreen('home')}/>}
         {screen==='payouts'&&<CallerPayouts emp={emp} deals={deals} assignments={assignments}/>}
       </div>
-      {logCall&&<LogCallModal call={logCall} callerName={emp.name} callerEmail={emp.email} orgs={orgs} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake} onClose={()=>setLogId('')}/>}
+      {logCall&&<LogCallModal call={logCall} callerName={emp.name} myCallerId={emp.id} orgs={orgs} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake} onClose={()=>setLogId('')}/>}
     </div>
   );
 }
@@ -1095,9 +1113,15 @@ const OUTCOMES = [
 // Standardized business-type / category options
 const BUSINESS_TYPES = ['Fast food','Pizza','Casual dining','Bakery/coffee shop','Healthy','Ethnic','International','Food truck','High-end','Nightlife','Other'];
 
-// What a call is worth (caller payout) — $5 to $250 in $5 steps
-const PAYOUT_AMOUNTS = Array.from({length:50},(_,i)=>(i+1)*5);
+// What a call is worth (caller payout) — $5 to $75 in $5 steps
+const PAYOUT_AMOUNTS = Array.from({length:15},(_,i)=>(i+1)*5);
 const leadValue = c => { if(c?.value!=null&&c.value!=='') return +c.value||0; const d=(c?.discount||'').toString().replace(/[^0-9.]/g,''); return d?+d:0; };
+// Multi-caller pool + claim model: a lead can be shared with several callers until one
+// logs an outcome ("claims" it); after that only the claimer sees it.
+const leadPool = c => (c?.callerIds&&c.callerIds.length) ? c.callerIds : (c?.callerId ? [c.callerId] : []);
+const leadClaimed = c => !!c?.callerId && c.status!=='to_call';
+const leadVisibleTo = (c,id) => leadClaimed(c) ? c.callerId===id : leadPool(c).includes(id);
+const leadAssignedTo = (c,id) => (c.callerId===id) || (!leadClaimed(c)&&leadPool(c).includes(id)); // admin attribution
 const ValuePicker = ({value,onChange}) => (
   <div style={{display:'flex',flexWrap:'wrap',gap:'6px',maxHeight:'156px',overflowY:'auto',padding:'2px'}}>
     {PAYOUT_AMOUNTS.map(a=>{ const on=+value===a; return (
@@ -1130,7 +1154,7 @@ const NoteField = ({note,setNote}) => (
   <Field label="Add a note"><textarea style={{...INP,minHeight:'58px',resize:'vertical'}} placeholder="What happened on the call?" value={note} onChange={e=>setNote(e.target.value)}/></Field>
 );
 
-function LogCallModal({ call, callerName, callerEmail, orgs=[], onUpdateCall, onAddRecordingTake, onClose }) {
+function LogCallModal({ call, callerName, myCallerId, orgs=[], onUpdateCall, onAddRecordingTake, onClose }) {
   const [outcome,setOutcome]=useState(null);
   const [submittedTake,setSubmittedTake]=useState(call.submittedTake??null);
   const [dm,setDm]=useState(call.decisionMaker||{title:'',firstName:'',lastName:''});
@@ -1147,8 +1171,6 @@ function LogCallModal({ call, callerName, callerEmail, orgs=[], onUpdateCall, on
   const [emailSubject,setEmailSubject]=useState(`More info from Tailgate Fundraising${call.business?` — ${call.business}`:''}`);
   const [emailBody,setEmailBody]=useState(`Hi${call.contact?` ${call.contact}`:''},\n\nGreat speaking with you today! As promised, here's a bit more about partnering with Tailgate Fundraising${call.business?` for ${call.business}`:''}.\n\n[Add any specific details you discussed here.]\n\nWhenever you're ready, just use the sign-up link below to get on the card. Any questions, reply right here.`);
   const [emailed,setEmailed]=useState(false);
-  const [sending,setSending]=useState(false);
-  const [emailErr,setEmailErr]=useState('');
 
   const setDmF=(k,v)=>setDm(d=>({...d,[k]:v}));
   const setAddr=(i,k,v)=>setAddresses(a=>a.map((x,j)=>j===i?{...x,[k]:v}:x));
@@ -1180,22 +1202,14 @@ function LogCallModal({ call, callerName, callerEmail, orgs=[], onUpdateCall, on
   ].filter(([,v])=>v);
 
   const withNote=base=>note.trim()?((base?base+'\n\n':'')+`${today()}: ${note.trim()}`):base;
-  const commit=patch=>{ onUpdateCall(call.id,{...patch, notes:withNote(call.notes||'')}); onClose(); };
-  // Info email — fixed sign-up link + caller name auto-appended (caller can't change those)
+  // Logging any outcome claims the lead for this caller (removes it from other callers' pool)
+  const commit=patch=>{ onUpdateCall(call.id,{...patch, ...(myCallerId?{callerId:myCallerId}:{}), notes:withNote(call.notes||'')}); onClose(); };
+  // Info email — opens the caller's mail app with an editable draft; the personalized
+  // Zoho sign-up link (merchant name + email pre-filled) and the caller's name are auto-appended.
   const emailTo=email||call.email;
-  const fullEmailBody=()=>`${emailBody}\n\nSign up to get on the card: ${SIGNUP_FORM_URL}\n\n— ${callerName}\nTailgate Fundraising`;
-  const sendEmail=async()=>{
-    setSending(true); setEmailErr('');
-    try{
-      const {data,error}=await supabase.functions.invoke('send-info-email',{body:{to:emailTo,subject:emailSubject,text:fullEmailBody(),replyTo:callerEmail||undefined}});
-      if(error) throw error;
-      if(data&&data.error) throw new Error(data.error);
-      setEmailed(true);
-    }catch(e){
-      setEmailErr('Could not send automatically ('+(e.message||e)+'). You can open your own email app instead.');
-    }finally{ setSending(false); }
-  };
-  const openMailto=()=>{ window.location.href=`mailto:${encodeURIComponent(emailTo||'')}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(fullEmailBody())}`; setEmailed(true); };
+  const merchantName=[dm.firstName,dm.lastName].filter(Boolean).join(' ')||spokeTo||call.contact||'';
+  const fullEmailBody=()=>`${emailBody}\n\nSign up to get on the card here:\n${signupLink(merchantName,emailTo)}\n\n— ${callerName}\nTailgate Fundraising`;
+  const openEmail=()=>{ window.location.href=`mailto:${encodeURIComponent(emailTo||'')}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(fullEmailBody())}`; setEmailed(true); };
 
   const save=()=>{
     const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
@@ -1255,6 +1269,7 @@ function LogCallModal({ call, callerName, callerEmail, orgs=[], onUpdateCall, on
           <div style={{minWidth:0}}>
             <div style={{display:'flex',alignItems:'center',gap:'10px',flexWrap:'wrap'}}>
               <span style={{fontSize:'20px',fontWeight:'600',color:'#0f172a'}}>{call.business||'Unknown business'}</span>
+              {call.group&&<span style={{background:'var(--color-background-info)',border:'1px solid var(--color-border-info)',borderRadius:'100px',padding:'3px 12px',fontSize:'12px',fontWeight:'600',color:'#185FA5'}}>Calling for {call.group}</span>}
               {leadValue(call)>0&&<span style={{background:'#E1F5EE',border:'1px solid #5DCAA5',borderRadius:'100px',padding:'3px 12px',fontSize:'14px',fontWeight:'700',color:'#0F6E56'}}>${leadValue(call)} payout</span>}
             </div>
             {leadAddress&&<div style={{display:'flex',alignItems:'center',gap:'5px',fontSize:'13px',color:'#64748b',marginTop:'4px'}}><MapPin size={13} style={{flexShrink:0}}/><span>{leadAddress}</span></div>}
@@ -1325,15 +1340,10 @@ function LogCallModal({ call, callerName, callerEmail, orgs=[], onUpdateCall, on
                 <Field label="Subject"><input style={INP} value={emailSubject} onChange={e=>setEmailSubject(e.target.value)}/></Field>
                 <Field label="Message (edit anything — add the specific details you discussed)"><textarea style={{...INP,minHeight:'120px',resize:'vertical'}} value={emailBody} onChange={e=>setEmailBody(e.target.value)}/></Field>
                 <div style={{background:'var(--color-background-secondary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px',fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>
-                  Automatically added to the bottom (can’t be changed): the sign-up link <b style={{color:'#185FA5'}}>{SIGNUP_FORM_URL}</b> and your name, <b style={{color:'#0f172a'}}>{callerName}</b>. Replies come back to you.
+                  Auto-added to the bottom (can’t be changed): the sign-up link (with {merchantName||'their name'} + their email pre-filled) and your name, <b style={{color:'#0f172a'}}>{callerName}</b>.
                 </div>
-                {emailed?(
-                  <div style={{fontSize:'13px',color:'#0F6E56',marginBottom:'10px',fontWeight:'500'}}>Sent to {emailTo}. Don’t forget to Save below.</div>
-                ):(
-                  <button style={{...BTN(true),width:'100%',justifyContent:'center',marginBottom:'8px',opacity:sending?0.7:1}} disabled={sending} onClick={sendEmail}><FileText size={14}/>{sending?'Sending…':'Send info email'}</button>
-                )}
-                {emailErr&&<div style={{fontSize:'12px',color:'#A32D2D',marginBottom:'10px'}}>{emailErr}</div>}
-                {emailErr&&<button style={{...BTN(false),width:'100%',justifyContent:'center',marginBottom:'8px'}} onClick={openMailto}>Open in my email app instead</button>}
+                {emailed&&<div style={{fontSize:'12px',color:'#0F6E56',marginBottom:'10px',fontWeight:'500'}}>Draft opened in your email app — send it there, then Save below.</div>}
+                <button style={{...BTN(true),width:'100%',justifyContent:'center',marginBottom:'8px'}} onClick={openEmail}><FileText size={14}/>Open email to send</button>
               </>
             ):(
               <div style={{fontSize:'13px',color:'#854F0B',marginBottom:'12px'}}>Add their email in the details above to send them the info.</div>
@@ -1408,11 +1418,12 @@ function LeadRow({ c, onOpenLog }) {
   return (
     <div style={{display:'grid',gridTemplateColumns:'34px 1fr auto auto',gap:'12px',alignItems:'center',padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
       <div style={{width:'34px',height:'34px',borderRadius:'50%',background:'var(--color-background-info)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',fontWeight:'600',color:'var(--color-text-info)'}}>{initials(c.contact||c.business||'?')}</div>
-      <div>
-        <div style={{fontWeight:'500',fontSize:'14px'}}>{c.business}</div>
+      <div style={{minWidth:0}}>
+        <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}><span style={{fontWeight:'500',fontSize:'14px'}}>{c.business}</span>{c.group&&<span style={{fontSize:'11px',color:'#185FA5',background:'var(--color-background-info)',borderRadius:'100px',padding:'1px 8px',fontWeight:'500'}}>{c.group}</span>}</div>
         <div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>{[c.contact,c.phone,c.location].filter(Boolean).join(' · ')||'No contact details'}</div>
       </div>
-      <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+      <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap',justifyContent:'flex-end'}}>
+        {!leadClaimed(c)&&leadPool(c).length>1&&<Badge color="gray">{leadPool(c).length} can see</Badge>}
         {leadValue(c)>0&&<span style={{background:'#E1F5EE',border:'1px solid #5DCAA5',borderRadius:'100px',padding:'2px 10px',fontSize:'12px',fontWeight:'700',color:'#0F6E56',whiteSpace:'nowrap'}}>${leadValue(c)}</span>}
         {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:overdue?'#A32D2D':'#185FA5',fontWeight:'500'}}>{overdue?'Due ':''}{fmtDateTime(c.callbackDate,c.callbackTime)}</span>}
         {(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
@@ -1426,22 +1437,26 @@ function LeadRow({ c, onOpenLog }) {
 function CallerHome({ myCalls, onOpenLog }) {
   const t=today();
   const [area,setArea]=useState('all');
+  const [groupF,setGroupF]=useState('all');
   const [sort,setSort]=useState('priority');
+  const [search,setSearch]=useState('');
   const [shownU,setShownU]=useState(LEAD_BATCH);
   const [shownR,setShownR]=useState(LEAD_BATCH);
   const order={callback:0,completed:1,interested:1,recorded:1,needs_info:2,no_answer:3,not_interested:4};
   // "Up next" = never contacted, or a callback whose date has arrived / passed
   const isUrgent=c=>c.status==='to_call'||(c.status==='callback'&&(c.callbackDate||'')<=t);
-  const inArea=c=>area==='all'||leadState(c)===area;
   const states=[...new Set(myCalls.map(leadState))].sort();
+  const groups=[...new Set(myCalls.map(c=>c.group).filter(Boolean))].sort();
+  const q=search.trim().toLowerCase();
+  const keep=c=>(area==='all'||leadState(c)===area)&&(groupF==='all'||c.group===groupF)&&(!q||[c.business,c.contact,c.phone,c.email,leadCity(c),c.group].some(v=>(v||'').toLowerCase().includes(q)));
   const sortList=(list,isU)=>{
     if(sort==='pay') return [...list].sort((a,b)=>leadValue(b)-leadValue(a)||(a.business||'').localeCompare(b.business||''));
     if(sort==='area') return [...list].sort((a,b)=>leadState(a).localeCompare(leadState(b))||leadCity(a).localeCompare(leadCity(b)));
     if(isU) return [...list].sort((a,b)=>{ const ac=a.status==='callback'?0:1,bc=b.status==='callback'?0:1; return (ac-bc)||((a.callbackDate||'').localeCompare(b.callbackDate||'')); });
     return [...list].sort((a,b)=>((order[a.status]??9)-(order[b.status]??9))||((a.callbackDate||'').localeCompare(b.callbackDate||'')));
   };
-  const urgent=sortList(myCalls.filter(c=>inArea(c)&&isUrgent(c)),true);
-  const rest=sortList(myCalls.filter(c=>inArea(c)&&!isUrgent(c)),false);
+  const urgent=sortList(myCalls.filter(c=>keep(c)&&isUrgent(c)),true);
+  const rest=sortList(myCalls.filter(c=>keep(c)&&!isUrgent(c)),false);
   const counts={
     to_call: myCalls.filter(c=>c.status==='to_call').length,
     callback: myCalls.filter(c=>c.status==='callback').length,
@@ -1460,16 +1475,19 @@ function CallerHome({ myCalls, onOpenLog }) {
         <Metric label="Completed" value={counts.completed} color="#0F6E56"/>
       </div>
       <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap',marginBottom:'14px'}}>
-        <span style={{fontSize:'12px',color:'#64748b'}}>Area</span>
+        <input style={{...selStyle,flex:'1 1 180px',minWidth:'150px'}} placeholder="Search leads — name, contact, city…" value={search} onChange={e=>{setSearch(e.target.value);setShownU(LEAD_BATCH);setShownR(LEAD_BATCH);}}/>
+        {groups.length>0&&<select style={selStyle} value={groupF} onChange={e=>{setGroupF(e.target.value);setShownU(LEAD_BATCH);setShownR(LEAD_BATCH);}}>
+          <option value="all">All groups</option>
+          {groups.map(g=><option key={g} value={g}>{g}</option>)}
+        </select>}
         <select style={selStyle} value={area} onChange={e=>{setArea(e.target.value);setShownU(LEAD_BATCH);setShownR(LEAD_BATCH);}}>
           <option value="all">All areas</option>
           {states.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
-        <span style={{fontSize:'12px',color:'#64748b',marginLeft:'6px'}}>Sort by</span>
         <select style={selStyle} value={sort} onChange={e=>setSort(e.target.value)}>
-          <option value="priority">Priority</option>
-          <option value="pay">Highest pay</option>
-          <option value="area">Location</option>
+          <option value="priority">Sort: Priority</option>
+          <option value="pay">Sort: Highest pay</option>
+          <option value="area">Sort: Location</option>
         </select>
       </div>
 
@@ -1707,22 +1725,23 @@ const leadDone = c => c.status==='completed'||c.status==='interested'||c.status=
 const leadState = c => { const s=(c.addresses?.[0]?.state||'').trim(); if(s) return s; const l=(c.location||'').trim(); if(l.includes(',')) return l.split(',').pop().trim(); return 'Unknown'; };
 const leadCity  = c => { const ci=(c.addresses?.[0]?.city||'').trim(); if(ci) return ci; const l=(c.location||'').trim(); if(l.includes(',')) return l.split(',')[0].trim(); return l||'—'; };
 
-const leadGroup = (c,by) => by==='city'?leadCity(c):by==='school'?(c.school||'No school/org'):leadState(c);
+const leadGroup = (c,by) => by==='city'?leadCity(c):by==='school'?(c.school||'No school/org'):by==='group'?(c.group||'No group'):leadState(c);
 
 function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImport, onMarkTouch, onSetValue }) {
   const [areaCaller,setAreaCaller]=useState('all');
-  const [groupBy,setGroupBy]=useState('state');
+  const [groupBy,setGroupBy]=useState('group');
   const [openState,setOpenState]=useState('');
   const pending=calls.filter(c=>(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&(c.submittedTake!=null||c.recordingPath)&&(!c.verifyStatus||c.verifyStatus==='pending'));
   const followUps=calls.filter(c=>c.status==='send_info');
   const nameOf=id=>employees.find(e=>e.id===id)?.name||'Unassigned';
 
-  const callerIds=[...new Set(calls.map(c=>c.callerId))];
-  const callerStats=callerIds.map(cid=>{ const list=calls.filter(c=>c.callerId===cid);
+  const callerIdSet=new Set();
+  calls.forEach(c=>{ leadPool(c).forEach(id=>callerIdSet.add(id)); if(c.callerId) callerIdSet.add(c.callerId); });
+  const callerStats=[...callerIdSet].filter(Boolean).map(cid=>{ const list=calls.filter(c=>leadAssignedTo(c,cid));
     return {cid, name:nameOf(cid), total:list.length, called:list.filter(leadContacted).length, done:list.filter(leadDone).length};
-  }).sort((a,b)=>b.total-a.total);
+  }).filter(s=>s.total>0).sort((a,b)=>b.total-a.total);
 
-  const areaCalls=areaCaller==='all'?calls:calls.filter(c=>c.callerId===areaCaller);
+  const areaCalls=areaCaller==='all'?calls:calls.filter(c=>leadAssignedTo(c,areaCaller));
   const groupMap={};
   areaCalls.forEach(c=>{ const k=leadGroup(c,groupBy); (groupMap[k]=groupMap[k]||[]).push(c); });
   const areas=Object.entries(groupMap).map(([state,list])=>({state,total:list.length,called:list.filter(leadContacted).length,list})).sort((a,b)=>b.total-a.total);
@@ -1787,12 +1806,13 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
       {/* By area / group */}
       <div style={CARD}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'10px',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)',flexWrap:'wrap'}}>
-          <span style={{fontWeight:'500',fontSize:'14px'}}>Coverage by {groupBy==='city'?'city':groupBy==='school'?'school / org':'state'}</span>
+          <span style={{fontWeight:'500',fontSize:'14px'}}>Coverage by {groupBy==='city'?'city':groupBy==='school'?'school':groupBy==='group'?'group / org':'state'}</span>
           <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
             <select style={{...INP,width:'auto',padding:'6px 9px',fontSize:'12px'}} value={groupBy} onChange={e=>{setGroupBy(e.target.value);setOpenState('');}}>
+              <option value="group">By group / org</option>
               <option value="state">By state</option>
               <option value="city">By city / town</option>
-              <option value="school">By school / org</option>
+              <option value="school">By school</option>
             </select>
             <select style={{...INP,width:'auto',padding:'6px 9px',fontSize:'12px'}} value={areaCaller} onChange={e=>setAreaCaller(e.target.value)}>
               <option value="all">All callers</option>
@@ -1821,7 +1841,7 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
                 const st=CALL_STATUS[c.status]||CALL_STATUS.to_call;
                 return (
                   <div key={c.id} style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'12px',alignItems:'center',padding:'10px 18px 10px 30px',borderTop:'0.5px solid var(--color-border-tertiary)',background:'var(--color-background-secondary)'}}>
-                    <div style={{minWidth:0}}><div style={{fontSize:'13px',fontWeight:'500'}}>{c.business}</div><div style={{fontSize:'11px',color:'#64748b'}}>{[leadCity(c),areaCaller==='all'?nameOf(c.callerId):null].filter(Boolean).join(' · ')}</div></div>
+                    <div style={{minWidth:0}}><div style={{fontSize:'13px',fontWeight:'500'}}>{c.business}</div><div style={{fontSize:'11px',color:'#64748b'}}>{[groupBy!=='group'?c.group:null,leadCity(c),c.callerId?nameOf(c.callerId):(!leadClaimed(c)&&leadPool(c).length>1?`${leadPool(c).length} callers`:null)].filter(Boolean).join(' · ')}</div></div>
                     <div style={{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap',justifyContent:'flex-end'}}>
                       {c.payout?.amount!=null?<Badge color="teal">{fmt$(c.payout.amount)} paid</Badge>:<span title="What this call pays the caller"><ValueSelect value={leadValue(c)||''} onChange={v=>onSetValue(c.id,v)}/></span>}
                       {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:'#185FA5'}}>{fmtDateTime(c.callbackDate,c.callbackTime)}</span>}
@@ -1840,18 +1860,20 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
 }
 
 function AddCallModal({ employees, onAdd, onClose }) {
-  const [callerId,setCallerId]=useState('');
+  const [callerIds,setCallerIds]=useState([]);
+  const [group,setGroup]=useState('');
   const [business,setBusiness]=useState('');
   const [contact,setContact]=useState('');
   const [phone,setPhone]=useState('');
   const [location,setLocation]=useState('');
   const [value,setValue]=useState(0);
   const [notes,setNotes]=useState('');
-  const ok=callerId&&business.trim();
-  const submit=()=>{ if(!ok) return; onAdd({callerId,business:business.trim(),contact:contact.trim(),phone:phone.trim(),location:location.trim(),value,notes:notes.trim()}); };
+  const ok=callerIds.length&&business.trim();
+  const submit=()=>{ if(!ok) return; onAdd({callerIds,group:group.trim(),business:business.trim(),contact:contact.trim(),phone:phone.trim(),location:location.trim(),value,notes:notes.trim()}); };
   return (
     <ModalWrap title="Assign a merchant call" onClose={onClose}>
-      <EmpPicker employees={employees} value={callerId} onChange={setCallerId} label="Assign to caller"/>
+      <MultiEmpPicker employees={employees} value={callerIds} onChange={setCallerIds} label="Assign to caller(s) — tap to add more"/>
+      <Field label="Calling for (group / organization)"><input style={INP} value={group} onChange={e=>setGroup(e.target.value)} placeholder="e.g. South Carolina IFC"/></Field>
       <Field label="Business name"><input style={INP} value={business} onChange={e=>setBusiness(e.target.value)} placeholder="e.g. Joe's Pizza" autoFocus/></Field>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
         <Field label="Contact name"><input style={INP} value={contact} onChange={e=>setContact(e.target.value)}/></Field>
@@ -1892,7 +1914,8 @@ function LeadImportModal({ employees, onImport, onClose }) {
   const [headers,setHeaders]=useState([]);
   const [rows,setRows]=useState([]);
   const [map,setMap]=useState({});
-  const [callerId,setCallerId]=useState('');
+  const [callerIds,setCallerIds]=useState([]);
+  const [group,setGroup]=useState('');
   const [batchValue,setBatchValue]=useState(0);
   const [dragOver,setDragOver]=useState(false);
   const fileRef=useRef();
@@ -1914,11 +1937,11 @@ function LeadImportModal({ employees, onImport, onClose }) {
       business:get(r,'business'), contact:get(r,'contact'), phone:get(r,'phone'), email:get(r,'email'),
       location:[addr.city,addr.state].filter(Boolean).join(', '), addresses:hasAddr?[addr]:[],
       category:get(r,'category'), businessType:get(r,'category'), school:get(r,'school'),
-      additionalInfo:get(r,'additionalInfo'), notes:get(r,'notes'), value:batchValue||0,
+      additionalInfo:get(r,'additionalInfo'), notes:get(r,'notes'), value:batchValue||0, group:group.trim(),
     };
   };
   const validRows=rows.filter(r=>map.business&&(r[map.business]||'').toString().trim());
-  const confirm=()=>{ if(!callerId) return; onImport(validRows.map(build), callerId); };
+  const confirm=()=>{ if(!callerIds.length) return; onImport(validRows.map(build), callerIds); };
 
   if(step==='upload') return (
     <ModalWrap title="Import merchant leads" onClose={onClose} wide>
@@ -1934,7 +1957,8 @@ function LeadImportModal({ employees, onImport, onClose }) {
 
   return (
     <ModalWrap title={`Map columns — ${validRows.length} leads`} onClose={onClose} wide>
-      <div style={{marginBottom:'12px'}}><EmpPicker employees={employees} value={callerId} onChange={setCallerId} label="Assign these leads to caller"/></div>
+      <div style={{marginBottom:'12px'}}><Field label="Calling for (group / organization) — shown to callers"><input style={INP} value={group} onChange={e=>setGroup(e.target.value)} placeholder="e.g. South Carolina IFC"/></Field></div>
+      <div style={{marginBottom:'12px'}}><MultiEmpPicker employees={employees} value={callerIds} onChange={setCallerIds} label="Assign these leads to caller(s) — tap to add more"/></div>
       <div style={{marginBottom:'12px'}}>
         <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>Payout per call for this batch (what the caller earns){batchValue?` — $${batchValue}`:' — optional, can set per-lead later'}</label>
         <ValuePicker value={batchValue} onChange={setBatchValue}/>
@@ -1965,7 +1989,7 @@ function LeadImportModal({ employees, onImport, onClose }) {
       {!map.business&&<div style={{display:'flex',alignItems:'center',gap:'7px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#854F0B',marginBottom:'14px'}}><AlertTriangle size={14} style={{flexShrink:0}}/><span>Pick which column is the <b>Business name</b> — it’s required.</span></div>}
       <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
         <button style={BTN(false)} onClick={()=>setStep('upload')}>Back</button>
-        <button style={{...BTN(true),opacity:(callerId&&map.business&&validRows.length)?1:0.5}} disabled={!(callerId&&map.business&&validRows.length)} onClick={confirm}>Import {validRows.length} leads</button>
+        <button style={{...BTN(true),opacity:(callerIds.length&&map.business&&validRows.length)?1:0.5}} disabled={!(callerIds.length&&map.business&&validRows.length)} onClick={confirm}>Import {validRows.length} leads</button>
       </div>
     </ModalWrap>
   );
@@ -2051,7 +2075,7 @@ export default function TailgatePayday() {
 
   // Merchant call assignments / mini-CRM
   const addCall=rec=>{ setC([...calls,{...rec,id:genId(),status:'to_call',createdAt:new Date().toISOString()}]); setModal(null); };
-  const addLeads=(leads,cid)=>{ const ls=leads.map(l=>({...l,id:genId(),callerId:cid,status:'to_call',createdAt:new Date().toISOString()})); setC([...calls,...ls]); setModal(null); };
+  const addLeads=(leads,callerIds)=>{ const ls=leads.map(l=>({...l,id:genId(),callerIds,status:'to_call',createdAt:new Date().toISOString()})); setC([...calls,...ls]); setModal(null); };
   const updateCall=(id,patch)=>setC(calls.map(c=>c.id===id?{...c,...patch}:c));
   // Every recorded take is persisted immediately so a redo can never lose the original
   const addRecordingTake=(id,take)=>setC(calls.map(c=>c.id===id?{...c,recordings:[...(c.recordings||[]),take]}:c));
