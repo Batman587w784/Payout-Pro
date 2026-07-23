@@ -1,0 +1,23 @@
+# Merge these blocks into supabase/config.toml. Do not replace the file.
+#
+# This is the single most important config in the port. The two public
+# functions MUST have verify_jwt disabled, because the merchant signing the
+# agreement is not a Payout Pro user and has no JWT. Leave it on and every
+# signing link returns 401.
+#
+# agreement-send keeps verify_jwt ON, and additionally checks in code that the
+# caller is a rep. Authentication and authorization are different things.
+
+[functions.agreement-send]
+verify_jwt = true
+
+[functions.agreement-sign]
+verify_jwt = false
+
+[functions.agreement-pdf]
+verify_jwt = false
+
+# If deploying from the CLI without config.toml, the equivalent is:
+#   supabase functions deploy agreement-send
+#   supabase functions deploy agreement-sign --no-verify-jwt
+#   supabase functions deploy agreement-pdf  --no-verify-jwt

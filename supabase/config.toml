@@ -1,0 +1,23 @@
+# Supabase config for Payout Pro.
+#
+# This repo had no config.toml, so this file is new — created to carry the
+# verify_jwt settings from config.functions.toml (§3.3 of HANDOFF.md). If you
+# later run `supabase init`/`supabase link`, merge any generated keys (e.g.
+# project_id) into this file rather than replacing it.
+#
+# The existing send-info-email function keeps the default (verify_jwt = true);
+# it is only ever called by signed-in users via supabase.functions.invoke.
+
+# --- e-signature functions ---------------------------------------------------
+# agreement-send: rep-only. verify_jwt ON, plus requireRep() in code.
+[functions.agreement-send]
+verify_jwt = true
+
+# agreement-sign: PUBLIC. The merchant signing has no Payout Pro account/JWT.
+# Leaving verify_jwt on returns 401 for every signing link.
+[functions.agreement-sign]
+verify_jwt = false
+
+# agreement-pdf: PUBLIC. Merchant fetches their signed copy with the token.
+[functions.agreement-pdf]
+verify_jwt = false

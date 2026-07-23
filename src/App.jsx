@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import { createClient } from '@supabase/supabase-js';
 import Papa from 'papaparse';
 import {
   Plus, ArrowLeft, Trash2, ChevronRight, ChevronUp, ChevronDown,
@@ -8,9 +7,11 @@ import {
   Phone, Video, Circle, Square, Play,
   Info, Clock, PhoneOff, XCircle, MapPin, AlertTriangle, Pause
 } from "lucide-react";
+import { supabase } from './supabaseClient';
+import SignAgreement from './pages/SignAgreement';
+import AgreementPanel from './components/AgreementPanel';
 
 // ─── Supabase ─────────────────────────────────────────────────────
-const supabase = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY);
 const ADMIN_EMAIL = 'shuffman@tailgateofficial.com';
 const APP_NAME = 'Tailgate Payday';
 const APP_TAGLINE = 'Tailgate Official Payout Management';
@@ -1179,6 +1180,11 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
   const [emailed,setEmailed]=useState(false);
   const [sending,setSending]=useState(false);
   const [emailErr,setEmailErr]=useState('');
+  // Completed outcome: choose Form (e-sign) or Verbal (record video)
+  const [completeMode,setCompleteMode]=useState(null); // null | 'form' | 'verbal'
+  const [agreementId,setAgreementId]=useState(null);
+  const [creatingAgr,setCreatingAgr]=useState(false);
+  const [agreementErr,setAgreementErr]=useState('');
 
   const setDmF=(k,v)=>setDm(d=>({...d,[k]:v}));
   const setAddr=(i,k,v)=>setAddresses(a=>a.map((x,j)=>j===i?{...x,[k]:v}:x));
@@ -1228,6 +1234,36 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     finally{ setSending(false); }
   };
   const openMailto=()=>{ window.location.href=`mailto:${encodeURIComponent(emailTo||'')}?subject=${encodeURIComponent(emailSubject)}&body=${encodeURIComponent(fullEmailBody())}`; setEmailed(true); };
+
+  // e-signature: lazily create the agreement row only when the rep picks Form.
+  // created_by defaults to auth.uid() (RLS); prefill snapshots the fields shown.
+  const createAgreement=async()=>{
+    const prefill={
+      business_name: businessName||call.business||'',
+      contact_person: merchantName,
+      phone: phone||call.phone||'',
+      email: emailTo||'',
+      address: (addresses.map(addrLine).filter(Boolean).join(', '))||leadAddress||call.location||'',
+      discount_offered: offerDetails||'',
+    };
+    const {data,error}=await supabase.from('agreements').insert({
+      merchant_id: call.id, school: call.school||null,
+      template_version:'discount-partnership-v1', prefill, status:'draft',
+    }).select('id').single();
+    if(error) throw error;
+    return data.id;
+  };
+  const startForm=async()=>{
+    setCreatingAgr(true); setAgreementErr('');
+    try{ const id=await createAgreement(); setAgreementId(id); setCompleteMode('form'); }
+    catch(e){ setAgreementErr('Could not start the agreement ('+(e.message||e)+'). Deploy the agreements table, or use Verbal.'); }
+    finally{ setCreatingAgr(false); }
+  };
+  const saveFormCompleted=()=>{
+    const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
+    commit({ status:'completed', verifyStatus:'pending', agreementId, decisionMaker:dm, spokeTo, email, phone,
+      business:businessName||call.business, businessType, category:businessType, addresses, location:loc||call.location||'', offerDetails });
+  };
 
   const save=()=>{
     const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
@@ -1337,11 +1373,32 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
 
       {outcome==='completed'&&(
         <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
-          <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}><Video size={16} style={{flexShrink:0,marginTop:'1px'}}/><span>Be sure to record a video of you confirming the discount with them — a video is <b>required</b> to mark this Completed. Scroll down, record, and tap “Use this recording.”</span></div>
-          <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'12px'}}>Confirm their details</div>
-          {detailsForm}
-          <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasVideoTake?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasVideoTake?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasVideoTake?'Video attached — this goes to your admin to verify and pay.':'No video attached yet — record one below to enable saving.'}</span></div>
-          <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasVideoTake?1:0.5}} disabled={!hasVideoTake} onClick={save}><CheckCircle size={14}/>Save completed</button>
+          {completeMode===null&&(
+            <div>
+              <div style={{fontSize:'13.5px',lineHeight:1.6,color:'#0f172a',background:'var(--color-background-secondary)',borderLeft:'3px solid #1D9E75',borderRadius:'8px',padding:'12px 14px',marginBottom:'14px'}}>Great, that all sounds good. Would you prefer we do this by a quick <b>form</b> I text or email you, or a <b>verbal</b> agreement right now?</div>
+              <div style={{display:'flex',gap:'10px'}}>
+                <button style={{...BTN(true),flex:1,justifyContent:'center',opacity:creatingAgr?0.7:1}} disabled={creatingAgr} onClick={startForm}><FileText size={14}/>{creatingAgr?'Preparing…':'Send agreement (form)'}</button>
+                <button style={{...BTN(false),flex:1,justifyContent:'center'}} onClick={()=>setCompleteMode('verbal')}><Video size={14}/>Verbal — record</button>
+              </div>
+              {agreementErr&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'10px'}}>{agreementErr}</div>}
+            </div>
+          )}
+          {completeMode==='verbal'&&(
+            <>
+              <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}><Video size={16} style={{flexShrink:0,marginTop:'1px'}}/><span>Be sure to record a video of you confirming the discount with them — a video is <b>required</b> to mark this Completed. Scroll down, record, and tap “Use this recording.”</span></div>
+              <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'12px'}}>Confirm their details</div>
+              {detailsForm}
+              <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasVideoTake?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasVideoTake?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasVideoTake?'Video attached — this goes to your admin to verify and pay.':'No video attached yet — record one below to enable saving.'}</span></div>
+              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasVideoTake?1:0.5}} disabled={!hasVideoTake} onClick={save}><CheckCircle size={14}/>Save completed</button>
+            </>
+          )}
+          {completeMode==='form'&&(
+            <>
+              <AgreementPanel initialStep="channel" agreementId={agreementId} businessName={businessName||call.business} defaultPhone={phone||call.phone||''} defaultEmail={emailTo||''} onVerbal={()=>setCompleteMode('verbal')}/>
+              <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'12px'}} onClick={saveFormCompleted}><CheckCircle size={14}/>Save — mark completed</button>
+              <div style={{fontSize:'12px',color:'#64748b',marginTop:'8px',lineHeight:1.5}}>Once they sign (you’ll see it update above), mark this completed — the signed agreement is the record, no video needed.</div>
+            </>
+          )}
         </div>
       )}
       {outcome==='needs_info'&&(
@@ -1766,7 +1823,7 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
         </div>
       )}
       {!url&&submitted&&<button style={BTN(false)} onClick={()=>load(submitted)} disabled={loading}><Play size={13}/>{loading?'Loading…':'Play recording'}</button>}
-      {!submitted&&<div style={{fontSize:'12px',color:'#854F0B'}}>No recording attached to this call.</div>}
+      {!submitted&&(call.agreementId?<div style={{fontSize:'12px',color:'#185FA5'}}>Completed via signed e-agreement (no recording).</div>:<div style={{fontSize:'12px',color:'#854F0B'}}>No recording attached to this call.</div>)}
       {err&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'8px'}}>{err}</div>}
       {url&&(isVideo
         ? <video src={url} controls style={{width:'100%',maxWidth:'420px',borderRadius:'var(--border-radius-md)',margin:'10px 0',display:'block'}}/>
@@ -2200,6 +2257,10 @@ export default function TailgatePayday() {
   const signOut=()=>supabase.auth.signOut();
   const userEmail=session?.user?.email;
   const isAdmin=userEmail===ADMIN_EMAIL;
+
+  // Public merchant signing page (no auth) — /sign/<token>. Handled before the app.
+  const signMatch = window.location.pathname.match(/^\/sign\/(.+)$/);
+  if(signMatch) return <SignAgreement token={decodeURIComponent(signMatch[1])}/>;
 
   if(authLoading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#64748b',fontSize:'14px'}}>Loading…</div>;
   if(recovery) return <ResetPasswordPage onDone={()=>setRecovery(false)} onCancel={()=>{setRecovery(false);signOut();}}/>;
