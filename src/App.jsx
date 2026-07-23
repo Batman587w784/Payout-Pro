@@ -1463,7 +1463,8 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
         </div>
       )}
 
-      {/* Script + recorder moved below the outcome buttons */}
+      {/* Recording — only shown once the rep picks the Verbal agreement path */}
+      {outcome==='completed'&&completeMode==='verbal'&&(
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'14px',marginTop:'4px'}}>
         <div style={{...CARD,padding:'16px'}}>
           <div style={{fontSize:'11px',fontWeight:'600',textTransform:'uppercase',letterSpacing:'0.6px',color:'#64748b',marginBottom:'10px'}}>Recording script — read once they’re interested</div>
@@ -1487,6 +1488,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
           <div style={{fontSize:'12px',color:'#64748b',marginTop:'10px',lineHeight:1.5}}>Put the call on <b>speakerphone</b> near your computer so the recording captures both voices. Every take is saved — you can re-record and pick the good one.</div>
         </div>
       </div>
+      )}
     </ModalWrap>
   );
 }

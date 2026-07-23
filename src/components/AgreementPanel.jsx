@@ -33,7 +33,7 @@ export default function AgreementPanel({
 }) {
   const [step, setStep] = useState(initialStep);
   const [channel, setChannel] = useState("sms");
-  const [dest, setDest] = useState(defaultPhone);
+  const [dest, setDest] = useState(toE164(defaultPhone));
   const [status, setStatus] = useState("sent");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
@@ -69,13 +69,22 @@ export default function AgreementPanel({
     setSending(true);
     setError(null);
     try {
+      const sendTo = channel === "sms" ? toE164(dest) : dest.trim();
       // invoke() attaches the signed-in rep's JWT automatically, which is what
       // the function's verify_jwt and requireRep check against.
       const { data, error: fnErr } = await supabase.functions.invoke(
         "agreement-send",
-        { body: { agreementId, channel, sendTo: dest.trim() } },
+        { body: { agreementId, channel, sendTo } },
       );
-      if (fnErr) throw fnErr;
+      if (fnErr) {
+        // FunctionsHttpError hides the real message in the Response body.
+        let msg = fnErr.message;
+        try {
+          const b = await fnErr.context?.json?.();
+          if (b?.error) msg = b.error;
+        } catch { /* keep generic message */ }
+        throw new Error(msg);
+      }
       if (data?.error) throw new Error(data.error);
       setStep("sent");
       setStatus("sent");
@@ -117,7 +126,7 @@ export default function AgreementPanel({
               active={channel === "sms"}
               onClick={() => {
                 setChannel("sms");
-                setDest(defaultPhone);
+                setDest(toE164(defaultPhone));
               }}
             >
               Text
@@ -235,6 +244,19 @@ function Script({ children }) {
       {children}
     </p>
   );
+}
+
+// Coerce a phone into E.164 for Twilio. US 10-digit -> +1XXXXXXXXXX; 11-digit
+// starting with 1 -> +1...; already-'+' kept. Anything else is returned trimmed
+// so the server validates it and shows a clear message.
+function toE164(raw) {
+  const s = (raw || "").trim();
+  if (!s) return "";
+  if (s.startsWith("+")) return "+" + s.slice(1).replace(/\D/g, "");
+  const d = s.replace(/\D/g, "");
+  if (d.length === 10) return "+1" + d;
+  if (d.length === 11 && d.startsWith("1")) return "+" + d;
+  return s;
 }
 
 function Toggle({ active, onClick, children }) {
