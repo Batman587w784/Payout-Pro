@@ -163,6 +163,29 @@ export default function SignAgreement({ token }) {
         {fields.business_name || "Your business"}
       </h1>
 
+      <div
+        style={{
+          border: `1px solid ${HAIRLINE}`,
+          borderRadius: 12,
+          overflow: "hidden",
+          background: "#fff",
+          margin: "0 0 12px",
+        }}
+      >
+        <embed
+          src="/discount-partnership-v1.pdf#toolbar=0"
+          type="application/pdf"
+          style={{ width: "100%", height: 520, border: "none", display: "block" }}
+        />
+      </div>
+      <p style={{ fontSize: 13, color: MUTED, margin: "0 0 24px" }}>
+        Can’t see the agreement above?{" "}
+        <a href="/discount-partnership-v1.pdf" target="_blank" rel="noreferrer" style={{ color: BLUE }}>
+          Open it in a new tab
+        </a>
+        . Fill in your details below to sign.
+      </p>
+
       <div style={terms}>{body}</div>
 
       <h2 style={h2}>Your details</h2>
@@ -319,7 +342,9 @@ const input = {
   border: `1px solid ${HAIRLINE}`,
   borderRadius: 12,
   fontSize: 16,
-  color: INK,
+  color: NAVY,
+  background: "#fff",
+  colorScheme: "light",
   fontFamily: "inherit",
   outlineColor: BLUE,
   boxSizing: "border-box",

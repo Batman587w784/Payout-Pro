@@ -65,7 +65,14 @@ export default function AgreementPanel({
     };
   }, [step, agreementId]);
 
+  const phoneOk =
+    channel !== "sms" || /^\+[1-9]\d{7,14}$/.test(toE164(dest));
+
   async function send() {
+    if (channel === "sms" && !phoneOk) {
+      setError("Enter a US phone number, e.g. (803) 555-1234.");
+      return;
+    }
     setSending(true);
     setError(null);
     try {
@@ -89,7 +96,12 @@ export default function AgreementPanel({
       setStep("sent");
       setStatus("sent");
     } catch (e) {
-      setError(e.message || "Could not send.");
+      // Texting is unreliable until A2P is fully registered — steer to email.
+      setError(
+        channel === "sms"
+          ? "Texting is temporarily unavailable — please use Email instead."
+          : (e.message || "Could not send."),
+      );
     } finally {
       setSending(false);
     }
@@ -145,17 +157,23 @@ export default function AgreementPanel({
           <input
             value={dest}
             onChange={(e) => setDest(e.target.value)}
-            placeholder={channel === "sms" ? "+18035551234" : "name@example.com"}
+            onBlur={() => channel === "sms" && setDest(toE164(dest))}
+            placeholder={channel === "sms" ? "(803) 555-1234" : "name@example.com"}
             style={input}
           />
 
+          {channel === "sms" && dest.trim() && !phoneOk && (
+            <p style={{ ...errorText, color: "#a35a1a" }}>
+              Enter a US phone number, e.g. (803) 555-1234.
+            </p>
+          )}
           {error && <p style={errorText}>{error}</p>}
 
           <div style={{ display: "flex", gap: 12, marginTop: 12 }}>
             <button
-              style={{ ...primary, opacity: sending || !dest.trim() ? 0.5 : 1 }}
+              style={{ ...primary, opacity: sending || !dest.trim() || !phoneOk ? 0.5 : 1 }}
               onClick={send}
-              disabled={sending || !dest.trim()}
+              disabled={sending || !dest.trim() || !phoneOk}
             >
               {sending ? "Sending…" : "Send now"}
             </button>
@@ -317,7 +335,9 @@ const input = {
   borderRadius: 12,
   fontSize: 16,
   fontFamily: "inherit",
-  color: INK,
+  color: NAVY,
+  background: "#fff",
+  colorScheme: "light",
   outlineColor: BLUE,
   boxSizing: "border-box",
 };

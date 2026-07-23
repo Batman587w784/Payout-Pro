@@ -51,6 +51,9 @@ const fmtDate = s => { if(!s) return ''; const [y,m,d]=s.split('-'); return `${S
 const fmtTime = t => { if(!t) return ''; const [h,m]=t.split(':').map(Number); const ap=h<12?'AM':'PM'; return `${h%12||12}:${String(m).padStart(2,'0')} ${ap}`; };
 const fmtDateTime = (d,t) => d ? `${fmtDate(d)}${t?` at ${fmtTime(t)}`:''}` : '';
 const initials = name => name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase();
+// US phone → E.164. 10 digits → +1XXXXXXXXXX; 11 starting with 1 → +1…; already-'+' kept;
+// anything else returned as-is so the caller/validator can flag it.
+const toE164 = raw => { const s=(raw||'').trim(); if(!s) return ''; if(s.startsWith('+')) return '+'+s.slice(1).replace(/\D/g,''); const d=s.replace(/\D/g,''); if(d.length===10) return '+1'+d; if(d.length===11&&d.startsWith('1')) return '+'+d; return s; };
 
 // Parse "08-May-2026 14:32:02" → "2026-05-08"
 const parseCSVDate = str => {
@@ -1255,6 +1258,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     return data.id;
   };
   const startForm=async()=>{
+    if(agreementId){ setCompleteMode('form'); return; } // reuse the draft; don't create a second
     setCreatingAgr(true); setAgreementErr('');
     try{ const id=await createAgreement(); setAgreementId(id); setCompleteMode('form'); }
     catch(e){ setAgreementErr('Could not start the agreement ('+(e.message||e)+'). Deploy the agreements table, or use Verbal.'); }
@@ -1377,6 +1381,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
           {completeMode===null&&(
             <div>
               <div style={{fontSize:'13.5px',lineHeight:1.6,color:'#0f172a',background:'var(--color-background-secondary)',borderLeft:'3px solid #1D9E75',borderRadius:'8px',padding:'12px 14px',marginBottom:'14px'}}>Great, that all sounds good. Would you prefer we do this by a quick <b>form</b> I text or email you, or a <b>verbal</b> agreement right now?</div>
+              <Field label="Discount they agreed to — fills into the form so they just confirm it"><input style={INP} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)} placeholder="e.g. 15% off any purchase, excludes alcohol"/></Field>
               <div style={{display:'flex',gap:'10px'}}>
                 <button style={{...BTN(true),flex:1,justifyContent:'center',opacity:creatingAgr?0.7:1}} disabled={creatingAgr} onClick={startForm}><FileText size={14}/>{creatingAgr?'Preparing…':'Send agreement (form)'}</button>
                 <button style={{...BTN(false),flex:1,justifyContent:'center'}} onClick={()=>setCompleteMode('verbal')}><Video size={14}/>Verbal — record</button>
@@ -1386,6 +1391,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
           )}
           {completeMode==='verbal'&&(
             <>
+              <button style={{...BTN(false),marginBottom:'12px',padding:'5px 12px',fontSize:'12px'}} onClick={()=>setCompleteMode(null)}><ArrowLeft size={13}/>Back to form / verbal</button>
               <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}><Video size={16} style={{flexShrink:0,marginTop:'1px'}}/><span>Be sure to record a video of you confirming the discount with them — a video is <b>required</b> to mark this Completed. Scroll down, record, and tap “Use this recording.”</span></div>
               <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'12px'}}>Confirm their details</div>
               {detailsForm}
@@ -1395,6 +1401,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
           )}
           {completeMode==='form'&&(
             <>
+              <button style={{...BTN(false),marginBottom:'12px',padding:'5px 12px',fontSize:'12px'}} onClick={()=>setCompleteMode(null)}><ArrowLeft size={13}/>Back to form / verbal</button>
               <AgreementPanel initialStep="channel" agreementId={agreementId} businessName={businessName||call.business} defaultPhone={phone||call.phone||''} defaultEmail={emailTo||''} onVerbal={()=>setCompleteMode('verbal')}/>
               <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'12px'}} onClick={saveFormCompleted}><CheckCircle size={14}/>Save — mark completed</button>
               <div style={{fontSize:'12px',color:'#64748b',marginTop:'8px',lineHeight:1.5}}>Once they sign (you’ll see it update above), mark this completed — the signed agreement is the record, no video needed.</div>
@@ -2137,7 +2144,7 @@ function LeadImportModal({ employees, onImport, onClose }) {
     const addr={street:get(r,'street'),city:get(r,'city'),state:get(r,'state')};
     const hasAddr=addr.street||addr.city||addr.state;
     return {
-      business:get(r,'business'), contact:get(r,'contact'), phone:get(r,'phone'), email:get(r,'email'),
+      business:get(r,'business'), contact:get(r,'contact'), phone:toE164(get(r,'phone')), email:get(r,'email'),
       location:[addr.city,addr.state].filter(Boolean).join(', '), addresses:hasAddr?[addr]:[],
       category:get(r,'category'), businessType:get(r,'category'), school:get(r,'school'),
       additionalInfo:get(r,'additionalInfo'), notes:get(r,'notes'), group:group.trim(),
