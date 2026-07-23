@@ -289,7 +289,7 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,userEmail,onSign
   const myCalls = calls.filter(c=>leadVisibleTo(c,emp.id));
   const queueCount = myCalls.filter(c=>c.status==='to_call'||c.status==='callback'||c.status==='no_answer').length;
   const logCall = myCalls.find(c=>c.id===logId); // derived fresh so recordings update live
-  const TABS=[['home','My Leads',Building2],['crm','CRM',Users],['payouts','Payouts',DollarSign]];
+  const TABS=[['home','My Leads',Building2],['crm','CRM',Users],['agreements','Agreements',FileText],['payouts','Payouts',DollarSign]];
 
   return (
     <div style={{minHeight:'100vh',background:'#f1f5f9',padding:'20px'}}>
@@ -312,6 +312,7 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,userEmail,onSign
 
         {screen==='home'&&<CallerHome myCalls={myCalls} onOpenLog={c=>setLogId(c.id)}/>}
         {screen==='crm'&&<CallerCRM myCalls={myCalls} onOpenLog={c=>setLogId(c.id)} onWorkQueue={()=>setScreen('home')}/>}
+        {screen==='agreements'&&<CallerAgreements/>}
         {screen==='payouts'&&<CallerPayouts emp={emp} deals={deals} assignments={assignments}/>}
       </div>
       {logCall&&<LogCallModal call={logCall} callerName={emp.name} callerEmail={emp.email} myCallerId={emp.id} orgs={orgs} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake} onClose={()=>setLogId('')}/>}
@@ -1695,6 +1696,75 @@ function CallerCRM({ myCalls, onOpenLog, onWorkQueue }) {
                   </button>
                 ))}
               </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Agreements the rep has sent — track who hasn't signed yet ──
+const AGR_STATUS = {
+  draft:  {label:'Draft — not sent',    color:'gray'},
+  sent:   {label:'Sent — awaiting open', color:'blue'},
+  viewed: {label:'Opened — not signed',  color:'amber'},
+  signed: {label:'Signed',               color:'teal'},
+  void:   {label:'Void',                 color:'red'},
+};
+const AGR_PENDING = ['draft','sent','viewed'];
+function CallerAgreements() {
+  const [rows,setRows]=useState(null); // null = loading
+  const [err,setErr]=useState('');
+  const [filter,setFilter]=useState('pending');
+  useEffect(()=>{
+    let active=true;
+    const fetchRows=async()=>{
+      const {data,error}=await supabase.from('agreements')
+        .select('id,prefill,status,created_at,updated_at').order('created_at',{ascending:false});
+      if(!active) return;
+      if(error){ setErr(error.message); setRows([]); } else { setErr(''); setRows(data||[]); }
+    };
+    fetchRows();
+    const ch=supabase.channel('agreements-list')
+      .on('postgres_changes',{event:'*',schema:'public',table:'agreements'},fetchRows)
+      .subscribe();
+    return ()=>{ active=false; supabase.removeChannel(ch); };
+  },[]);
+  const all=rows||[];
+  const waiting=all.filter(a=>AGR_PENDING.includes(a.status)).length;
+  const signed=all.filter(a=>a.status==='signed').length;
+  const shown=all.filter(a=>filter==='all'?true:filter==='signed'?a.status==='signed':AGR_PENDING.includes(a.status));
+  const TABS=[['pending',`Waiting on (${waiting})`],['signed',`Signed (${signed})`],['all',`All (${all.length})`]];
+  return (
+    <div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px',marginBottom:'16px'}}>
+        <Metric label="Waiting on" value={waiting} color="#854F0B"/>
+        <Metric label="Signed" value={signed} color="#0F6E56"/>
+        <Metric label="Total sent" value={all.length}/>
+      </div>
+      <div style={{display:'flex',gap:'6px',marginBottom:'14px',flexWrap:'wrap'}}>
+        {TABS.map(([k,label])=>(
+          <button key={k} onClick={()=>setFilter(k)} style={{...BTN(filter===k),padding:'6px 12px',fontSize:'12px'}}>{label}</button>
+        ))}
+      </div>
+      {err&&<div style={{background:'#FCEBEB',border:'0.5px solid #F09595',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#A32D2D',marginBottom:'14px'}}>Couldn’t load agreements: {err}</div>}
+      <div style={CARD}>
+        <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Your agreements</span></div>
+        {rows===null?(
+          <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Loading…</div>
+        ):shown.length===0?(
+          <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>{all.length===0?'No agreements yet. When you send one from a call, it shows up here.':'Nothing in this filter.'}</div>
+        ):shown.map(a=>{
+          const st=AGR_STATUS[a.status]||AGR_STATUS.draft;
+          const when=(a.updated_at||a.created_at||'').split('T')[0];
+          return (
+            <div key={a.id} style={{display:'grid',gridTemplateColumns:'1fr auto',gap:'12px',alignItems:'center',padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+              <div style={{minWidth:0}}>
+                <div style={{fontWeight:'500',fontSize:'14px'}}>{a.prefill?.business_name||'Agreement'}</div>
+                <div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>{a.status==='signed'?'Signed':'Last update'} {fmtDate(when)}</div>
+              </div>
+              <Badge color={st.color}>{st.label}</Badge>
             </div>
           );
         })}
