@@ -202,14 +202,16 @@ export default function SignAgreement({ token }) {
 
       <h2 style={h2}>Your discount</h2>
       <p style={{ ...p, fontSize: 14, margin: "0 0 8px" }}>
-        Include any terms, for example "15% off any purchase, excludes alcohol"
-        or "Buy one get one free, dine in only."
+        Spell out the full offer and any conditions — such as a minimum
+        purchase, exclusions, or when it applies. For example: "15% off any
+        purchase over $25, excludes alcohol," "Buy one get one free, dine in
+        only," or "$5 off, one per customer per visit."
       </p>
       <textarea
         value={fields.discount_offered}
         onChange={(e) => set("discount_offered", e.target.value)}
         rows={3}
-        placeholder="% off, BOGO, free appetizer…"
+        placeholder="% off / BOGO / free item, any minimum purchase, and special conditions…"
         style={{ ...input, height: "auto", padding: 14, resize: "vertical" }}
       />
 

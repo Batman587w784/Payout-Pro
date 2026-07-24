@@ -1381,7 +1381,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
           {completeMode===null&&(
             <div>
               <div style={{fontSize:'13.5px',lineHeight:1.6,color:'#0f172a',background:'var(--color-background-secondary)',borderLeft:'3px solid #1D9E75',borderRadius:'8px',padding:'12px 14px',marginBottom:'14px'}}>Great, that all sounds good. Would you prefer we do this by a quick <b>form</b> I text or email you, or a <b>verbal</b> agreement right now?</div>
-              <Field label="Discount they agreed to — fills into the form so they just confirm it"><input style={INP} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)} placeholder="e.g. 15% off any purchase, excludes alcohol"/></Field>
+              <Field label="Discount they agreed to — fills into the form so they just confirm it"><input style={INP} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)} placeholder="e.g. 15% off over $25, dine-in only, one per visit"/></Field>
               <div style={{display:'flex',gap:'10px'}}>
                 <button style={{...BTN(true),flex:1,justifyContent:'center',opacity:creatingAgr?0.7:1}} disabled={creatingAgr} onClick={startForm}><FileText size={14}/>{creatingAgr?'Preparing…':'Send agreement (form)'}</button>
                 <button style={{...BTN(false),flex:1,justifyContent:'center'}} onClick={()=>setCompleteMode('verbal')}><Video size={14}/>Verbal — record</button>
