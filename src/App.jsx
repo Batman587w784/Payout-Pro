@@ -5,7 +5,7 @@ import {
   FileText, Users, Building2, DollarSign, Calendar,
   Upload, LogOut, CheckCircle, Shield, Download,
   Phone, Video, Circle, Square, Play,
-  Info, Clock, PhoneOff, XCircle, MapPin, AlertTriangle, Pause
+  Info, Clock, PhoneOff, XCircle, MapPin, AlertTriangle, Pause, Pencil
 } from "lucide-react";
 import { supabase } from './supabaseClient';
 import SignAgreement from './pages/SignAgreement';
@@ -1542,7 +1542,7 @@ const computeGroupStats = list => {
     const total=items.length;
     const called=items.filter(leadContacted).length;
     const start=items.map(c=>(c.createdAt||'').split('T')[0]).filter(Boolean).sort()[0]||today();
-    const due=addDays(start,GROUP_DEADLINE_DAYS);
+    const due=items.find(c=>c.groupDue)?.groupDue||addDays(start,GROUP_DEADLINE_DAYS); // admin override wins
     return {group,total,called,pct:total?Math.round(called/total*100):0,due,left:daysUntil(due)};
   }).sort((a,b)=>(a.pct-b.pct)||((a.left??0)-(b.left??0)));
 };
@@ -1985,7 +1985,7 @@ const leadCity  = c => { const ci=(c.addresses?.[0]?.city||'').trim(); if(ci) re
 
 const leadGroup = (c,by) => by==='city'?leadCity(c):by==='school'?(c.school||'No school/org'):by==='group'?(c.group||'No group'):leadState(c);
 
-function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImport, onMarkTouch, onSetValue }) {
+function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImport, onMarkTouch, onSetValue, onEditGroup }) {
   const [areaCaller,setAreaCaller]=useState('all');
   const [groupBy,setGroupBy]=useState('group');
   const [openState,setOpenState]=useState('');
@@ -2083,7 +2083,8 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
         ):areas.map(a=>{
           const pct=a.total?Math.round(a.called/a.total*100):0; const open=openState===a.state;
           const start=a.list.map(c=>(c.createdAt||'').split('T')[0]).filter(Boolean).sort()[0];
-          const left=(groupBy==='group'&&start)?daysUntil(addDays(start,GROUP_DEADLINE_DAYS)):null;
+          const gDue=a.list.find(c=>c.groupDue)?.groupDue||(start?addDays(start,GROUP_DEADLINE_DAYS):null);
+          const left=(groupBy==='group'&&gDue)?daysUntil(gDue):null;
           const done=pct>=100;
           return (
             <div key={a.state} style={{borderTop:'0.5px solid var(--color-border-tertiary)'}}>
@@ -2091,8 +2092,9 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
                 <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'8px'}}>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontWeight:'500',fontSize:'14px'}}>{a.state}</div>
-                    <div style={{fontSize:'12px',color:'#64748b'}}>{a.called} of {a.total} called · {a.total-a.called} left</div>
+                    <div style={{fontSize:'12px',color:'#64748b'}}>{a.called} of {a.total} called · {a.total-a.called} left{(()=>{const pool=[...new Set(a.list.flatMap(leadPool))].filter(Boolean);return pool.length?` · ${pool.map(nameOf).join(', ')}`:'';})()}</div>
                   </div>
+                  {groupBy==='group'&&<button onClick={e=>{e.stopPropagation();const pool=[...new Set(a.list.flatMap(leadPool))].filter(Boolean);onEditGroup(a.state,{name:a.state==='No group'?'':a.state,callerIds:pool,due:gDue||'',count:a.total});}} style={{...BTN(false),padding:'5px 10px',fontSize:'12px',whiteSpace:'nowrap'}}><Pencil size={12}/>Edit</button>}
                   {left!=null&&!done&&<span style={{fontSize:'12px',fontWeight:'700',color:left<0?'#A32D2D':left<=2?'#854F0B':'#185FA5',whiteSpace:'nowrap'}}>{left<0?`${-left}d overdue`:left===0?'Due today':`${left}d left`}</span>}
                   <div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:pct>=50?'#0F6E56':'#854F0B'}}>{pct}%</div>
                   {open?<ChevronUp size={15} color="var(--color-text-secondary)"/>:<ChevronDown size={15} color="var(--color-text-secondary)"/>}
@@ -2146,6 +2148,27 @@ function AddCallModal({ employees, onAdd, onClose }) {
       <div style={{fontSize:'12px',color:'#64748b',marginTop:'-4px',marginBottom:'12px'}}>This is the caller’s payout for closing it — not the merchant’s discount. The caller fills in the actual discount (e.g. 15% off) on the call.</div>
       <Field label="Notes (optional)"><textarea style={{...INP,minHeight:'56px',resize:'vertical'}} value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
       <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'6px',opacity:ok?1:0.5}} onClick={submit} disabled={!ok}>Assign call</button>
+    </ModalWrap>
+  );
+}
+
+// ── Super-admin: rename a group, reassign its callers, and set its due date ──
+function GroupEditModal({ employees, group, onSave, onClose }) {
+  const [name,setName]=useState(group.name||'');
+  const [callerIds,setCallerIds]=useState(group.callerIds||[]);
+  const [due,setDue]=useState(group.due||'');
+  const submit=()=>onSave(group.groupKey,{name,callerIds,due});
+  return (
+    <ModalWrap title={`Edit group — ${group.groupKey}`} onClose={onClose}>
+      <div style={{fontSize:'12px',color:'#64748b',marginBottom:'14px'}}>Changes apply to all {group.count} lead{group.count===1?'':'s'} in this group.</div>
+      <Field label="Group / organization name"><input style={INP} value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. South Carolina IFC" autoFocus/></Field>
+      {!name.trim()&&<div style={{fontSize:'12px',color:'#854F0B',marginTop:'-6px',marginBottom:'12px'}}>Leaving this blank keeps these leads ungrouped (shown as “No group”).</div>}
+      <MultiEmpPicker employees={employees} value={callerIds} onChange={setCallerIds} label="Who can call this group — tap to add or remove"/>
+      {callerIds.length===0&&<div style={{fontSize:'12px',color:'#854F0B',marginTop:'-6px',marginBottom:'12px'}}>With no callers assigned, these leads won’t appear for anyone until you add someone.</div>}
+      <div style={{fontSize:'11px',color:'#64748b',marginTop:'-4px',marginBottom:'12px'}}>Leads a caller has already claimed stay with that caller; this sets who can pick up the rest.</div>
+      <Field label="Due date (finish-by goal)"><input style={INP} type="date" value={due} onChange={e=>setDue(e.target.value)}/></Field>
+      <div style={{fontSize:'12px',color:'#64748b',marginTop:'-4px',marginBottom:'14px'}}>Drives the countdown callers see. Leave blank to use the default {GROUP_DEADLINE_DAYS}-day window from the first lead.</div>
+      <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={submit}>Save changes</button>
     </ModalWrap>
   );
 }
@@ -2343,6 +2366,12 @@ export default function TailgatePayday() {
   const addCall=rec=>{ setC([...calls,{...rec,id:genId(),status:'to_call',createdAt:new Date().toISOString()}]); setModal(null); };
   const addLeads=(leads,callerIds)=>{ const ls=leads.map(l=>({...l,id:genId(),callerIds,status:'to_call',createdAt:new Date().toISOString()})); setC([...calls,...ls]); setModal(null); };
   const updateCall=(id,patch)=>setC(calls.map(c=>c.id===id?{...c,...patch}:c));
+  // Super-admin group edit: rename the group, reassign its caller pool, and set a due date — applied to every lead in that group.
+  const updateGroup=(groupKey,{name,callerIds,due})=>{
+    const nm=(name||'').trim();
+    setC(calls.map(c=>((c.group||'No group')!==groupKey)?c:{...c,group:nm,callerIds:callerIds||[],groupDue:due||undefined}));
+    setModal(null);
+  };
   // Every recorded take is persisted immediately so a redo can never lose the original
   const addRecordingTake=(id,take)=>setC(calls.map(c=>c.id===id?{...c,recordings:[...(c.recordings||[]),take]}:c));
   const rejectCall=id=>setC(calls.map(c=>c.id===id?{...c,verifyStatus:'rejected'}:c));
@@ -2431,7 +2460,7 @@ export default function TailgatePayday() {
       {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onImportCSV={()=>setModal({type:'importCSV'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
       {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
       {tab==='payroll'&&<PayrollView employees={employees} deals={deals} assignments={assignments}/>}
-      {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})}/>}
+      {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})} onEditGroup={(groupKey,data)=>setModal({type:'editGroup',data:{groupKey,...data}})}/>}
 
       {modal?.type==='addEmp'&&<AddEmployeeModal initialEmail={modal.data?.email} onAdd={addEmployee} onClose={()=>setModal(null)}/>}
       {modal?.type==='addOrg'&&<AddOrgModal onAdd={addOrg} onClose={()=>setModal(null)}/>}
@@ -2440,6 +2469,7 @@ export default function TailgatePayday() {
       {modal?.type==='payStub'&&<PayStubModal emp={modal.data.emp} period={modal.data.p} onClose={()=>setModal(null)}/>}
       {modal?.type==='addCall'&&<AddCallModal employees={employees} onAdd={addCall} onClose={()=>setModal(null)}/>}
       {modal?.type==='importLeads'&&<LeadImportModal employees={employees} onImport={addLeads} onClose={()=>setModal(null)}/>}
+      {modal?.type==='editGroup'&&<GroupEditModal employees={employees} group={modal.data} onSave={updateGroup} onClose={()=>setModal(null)}/>}
     </div>
   );
 }
