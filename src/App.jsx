@@ -976,6 +976,12 @@ const VERIFY = {
 // Filesystem-safe slug for organizing recordings in the storage bucket
 const slug = s => (s||'').toString().toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40) || 'x';
 const REC_MAX_SEC = 15 * 60;        // auto-stop recordings at 15 minutes
+// Keep files small so they always upload and never fill the bucket. A confirmation
+// clip only needs to be audible + a visible face — not broadcast quality. At these
+// rates ~600kbps total, so 30 MB is roughly 6–7 minutes of video (audio-only is tiny).
+const REC_VIDEO_BPS = 500000;       // 500 kbps video
+const REC_AUDIO_BPS = 96000;        // 96 kbps audio
+const REC_SIZE_WARN_MB = 30;        // flag anything past this so it can be re-done shorter
 const FOLLOWUP_TOUCHES = 3;         // "send me more info" track = 3 touches
 // The name to slug into a recording's filename (best info we have at record time)
 const callContactName = c => {
@@ -1020,8 +1026,10 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake 
     if(!streamRef.current){setError('Turn on your '+(mediaMode==='video'?'camera':'microphone')+' first.');return;}
     setError(''); setReview(null); chunksRef.current=[];
     const mime=REC_MIME();
+    // Cap the bitrate so recordings stay small (see REC_*_BPS) — the real "condense".
+    const opts=mime?{mimeType:mime, audioBitsPerSecond:REC_AUDIO_BPS, ...(mediaMode==='video'?{videoBitsPerSecond:REC_VIDEO_BPS}:{})}:undefined;
     let rec;
-    try{ rec=new MediaRecorder(streamRef.current, mime?{mimeType:mime, videoBitsPerSecond:1000000}:undefined); }
+    try{ rec=new MediaRecorder(streamRef.current, opts); }
     catch{ setError('Recording is not supported in this browser. Please use Chrome.'); return; }
     rec.ondataavailable=e=>{ if(e.data&&e.data.size) chunksRef.current.push(e.data); };
     rec.onstop=()=>save(rec.mimeType||mime||'video/webm');
@@ -1076,6 +1084,7 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake 
             ? <video src={review.url} controls style={{width:'100%',borderRadius:'var(--border-radius-md)',display:'block',background:'#0f172a'}}/>
             : <audio src={review.url} controls style={{width:'100%'}}/>}
           <div style={{fontSize:'12px',color:'#0F6E56',fontWeight:'600',marginTop:'8px'}}>✓ Take {review.take.take} saved &amp; selected · {mmss(review.take.durationSec)} · {review.take.sizeMB} MB — you’re done. Record again only if you want a better one.</div>
+          {review.take.sizeMB>REC_SIZE_WARN_MB&&<div style={{fontSize:'12px',color:'#854F0B',marginTop:'6px',lineHeight:1.5}}>Heads up — this one is large ({review.take.sizeMB} MB). It still saved fine, but for the confirmation you usually only need a short clip. Consider a quick “Record again” (or switch to Audio only) to keep it small.</div>}
         </div>
       ) : isVideo ? (
         <div style={{position:'relative',background:'#0f172a',borderRadius:'var(--border-radius-md)',overflow:'hidden',aspectRatio:'4 / 3',marginBottom:'12px',display:'flex',alignItems:'center',justifyContent:'center'}}>
