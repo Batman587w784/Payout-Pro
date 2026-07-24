@@ -1245,6 +1245,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     const prefill={
       business_name: businessName||call.business||'',
       contact_person: merchantName,
+      contact_title: dm.title||'',
       phone: phone||call.phone||'',
       email: emailTo||'',
       address: (addresses.map(addrLine).filter(Boolean).join(', '))||leadAddress||call.location||'',
@@ -1378,33 +1379,39 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
 
       {outcome==='completed'&&(
         <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
+          <div style={{fontSize:'13.5px',lineHeight:1.6,color:'#0f172a',background:'var(--color-background-secondary)',borderLeft:'3px solid #1D9E75',borderRadius:'8px',padding:'12px 14px',marginBottom:'14px'}}>Would you rather we confirm via a quick <b>form</b> or a <b>verbal</b> agreement?</div>
+          {/* Choice stays visible — switch anytime */}
+          <div style={{display:'flex',gap:'10px',marginBottom:'14px'}}>
+            <button style={{...BTN(completeMode==='form'),flex:1,justifyContent:'center'}} onClick={()=>setCompleteMode('form')}><FileText size={14}/>Send agreement (form)</button>
+            <button style={{...BTN(completeMode==='verbal'),flex:1,justifyContent:'center'}} onClick={()=>setCompleteMode('verbal')}><Video size={14}/>Verbal — record</button>
+          </div>
+
           {completeMode===null&&(
-            <div>
-              <div style={{fontSize:'13.5px',lineHeight:1.6,color:'#0f172a',background:'var(--color-background-secondary)',borderLeft:'3px solid #1D9E75',borderRadius:'8px',padding:'12px 14px',marginBottom:'14px'}}>Great, that all sounds good. Would you prefer we do this by a quick <b>form</b> I text or email you, or a <b>verbal</b> agreement right now?</div>
-              <Field label="Discount they agreed to — fills into the form so they just confirm it"><input style={INP} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)} placeholder="e.g. 15% off over $25, dine-in only, one per visit"/></Field>
-              <div style={{display:'flex',gap:'10px'}}>
-                <button style={{...BTN(true),flex:1,justifyContent:'center',opacity:creatingAgr?0.7:1}} disabled={creatingAgr} onClick={startForm}><FileText size={14}/>{creatingAgr?'Preparing…':'Send agreement (form)'}</button>
-                <button style={{...BTN(false),flex:1,justifyContent:'center'}} onClick={()=>setCompleteMode('verbal')}><Video size={14}/>Verbal — record</button>
-              </div>
-              {agreementErr&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'10px'}}>{agreementErr}</div>}
-            </div>
+            <div style={{fontSize:'13px',color:'#64748b',padding:'2px'}}>Pick <b>form</b> or <b>verbal</b> above to continue.</div>
           )}
+
+          {completeMode==='form'&&(!agreementId?(
+            <>
+              <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>Enter everything you have — it pre-fills the form so they just confirm it, not fill it out.</div>
+              {detailsForm}
+              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:creatingAgr?0.7:1}} disabled={creatingAgr} onClick={startForm}><FileText size={14}/>{creatingAgr?'Preparing…':'Continue — choose text or email'}</button>
+              {agreementErr&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'10px'}}>{agreementErr}</div>}
+            </>
+          ):(
+            <>
+              <AgreementPanel initialStep="channel" agreementId={agreementId} businessName={businessName||call.business} defaultPhone={phone||call.phone||''} defaultEmail={emailTo||''} onVerbal={()=>setCompleteMode('verbal')}/>
+              <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'12px'}} onClick={saveFormCompleted}><CheckCircle size={14}/>Save — mark completed</button>
+              <div style={{fontSize:'12px',color:'#64748b',marginTop:'8px',lineHeight:1.5}}>Once they sign (you’ll see it update above), mark this completed — the signed agreement is the record, no video needed.</div>
+            </>
+          ))}
+
           {completeMode==='verbal'&&(
             <>
-              <button style={{...BTN(false),marginBottom:'12px',padding:'5px 12px',fontSize:'12px'}} onClick={()=>setCompleteMode(null)}><ArrowLeft size={13}/>Back to form / verbal</button>
               <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}><Video size={16} style={{flexShrink:0,marginTop:'1px'}}/><span>Be sure to record a video of you confirming the discount with them — a video is <b>required</b> to mark this Completed. Scroll down, record, and tap “Use this recording.”</span></div>
               <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'12px'}}>Confirm their details</div>
               {detailsForm}
               <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasVideoTake?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasVideoTake?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasVideoTake?'Video attached — this goes to your admin to verify and pay.':'No video attached yet — record one below to enable saving.'}</span></div>
               <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasVideoTake?1:0.5}} disabled={!hasVideoTake} onClick={save}><CheckCircle size={14}/>Save completed</button>
-            </>
-          )}
-          {completeMode==='form'&&(
-            <>
-              <button style={{...BTN(false),marginBottom:'12px',padding:'5px 12px',fontSize:'12px'}} onClick={()=>setCompleteMode(null)}><ArrowLeft size={13}/>Back to form / verbal</button>
-              <AgreementPanel initialStep="channel" agreementId={agreementId} businessName={businessName||call.business} defaultPhone={phone||call.phone||''} defaultEmail={emailTo||''} onVerbal={()=>setCompleteMode('verbal')}/>
-              <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'12px'}} onClick={saveFormCompleted}><CheckCircle size={14}/>Save — mark completed</button>
-              <div style={{fontSize:'12px',color:'#64748b',marginTop:'8px',lineHeight:1.5}}>Once they sign (you’ll see it update above), mark this completed — the signed agreement is the record, no video needed.</div>
             </>
           )}
         </div>

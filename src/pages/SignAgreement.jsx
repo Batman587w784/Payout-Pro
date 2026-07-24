@@ -69,6 +69,7 @@ export default function SignAgreement({ token }) {
         setFields({ ...EMPTY, ...j.prefill });
         setBody(j.body);
         setSignerName(j.prefill?.contact_person ?? "");
+        setSignerTitle(j.prefill?.contact_title ?? "");
         if (j.alreadySigned) setDone(true);
         setReady(true);
       })
