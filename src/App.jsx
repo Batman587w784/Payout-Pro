@@ -1732,12 +1732,18 @@ const AGR_STATUS = {
 };
 const AGR_PENDING = ['draft','sent','viewed'];
 const ago = iso => { if(!iso) return ''; const m=Math.floor((Date.now()-new Date(iso).getTime())/60000); if(m<1) return 'just now'; if(m<60) return m+'m'; const h=Math.floor(m/60); if(h<24) return h+'h'; return Math.floor(h/24)+'d'; };
+const AGR_COLS = [['waiting','Waiting','blue'],['remind','Remind','amber'],['signed','Signed','teal']];
+const AGR_REMIND_DAYS = 2; // out this long and still unsigned → the "Remind" column
+const agrBucket = a => {
+  if(a.status==='signed') return 'signed';
+  if(!AGR_PENDING.includes(a.status)) return null;
+  return Math.floor((Date.now()-new Date(a.created_at).getTime())/86400000) >= AGR_REMIND_DAYS ? 'remind' : 'waiting';
+};
 
 function CallerAgreements() {
   const [rows,setRows]=useState(null); // null = loading
   const [err,setErr]=useState('');
-  const [filter,setFilter]=useState('pending');
-  const [openId,setOpenId]=useState('');   // row whose remind options are open
+  const [openId,setOpenId]=useState('');   // expanded card
   const [busy,setBusy]=useState('');       // id currently sending
   const [note,setNote]=useState({});       // per-id feedback
   useEffect(()=>{
@@ -1755,10 +1761,6 @@ function CallerAgreements() {
     return ()=>{ active=false; supabase.removeChannel(ch); };
   },[]);
   const all=rows||[];
-  const waiting=all.filter(a=>AGR_PENDING.includes(a.status)).length;
-  const signed=all.filter(a=>a.status==='signed').length;
-  const shown=all.filter(a=>filter==='all'?true:filter==='signed'?a.status==='signed':AGR_PENDING.includes(a.status));
-  const TABS=[['pending',`Waiting (${waiting})`],['signed',`Signed (${signed})`],['all',`All (${all.length})`]];
   const remind=async(a,channel)=>{
     const sendTo=channel==='sms'?(a.prefill?.phone||''):(a.prefill?.email||'');
     if(!sendTo){ setNote(n=>({...n,[a.id]:'No '+(channel==='sms'?'phone':'email')+' on file.'})); return; }
@@ -1773,52 +1775,63 @@ function CallerAgreements() {
   };
   return (
     <div>
-      <div style={{fontSize:'13px',color:'#64748b',marginBottom:'12px'}}>Agreements you’ve sent. Chase anyone who hasn’t signed — tap their number to call, or send a quick reminder.</div>
-      <div style={{display:'flex',gap:'6px',marginBottom:'12px',flexWrap:'wrap'}}>
-        {TABS.map(([k,label])=>(<button key={k} onClick={()=>setFilter(k)} style={{...BTN(filter===k),padding:'6px 12px',fontSize:'12px'}}>{label}</button>))}
-      </div>
+      <div style={{fontSize:'13px',color:'#64748b',marginBottom:'14px'}}>Agreements you’ve sent, grouped by where they stand. Click a card for contact info, or send a reminder. “Remind” collects anyone out {AGR_REMIND_DAYS}+ days.</div>
       {err&&<div style={{background:'#FCEBEB',border:'0.5px solid #F09595',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#A32D2D',marginBottom:'14px'}}>Couldn’t load agreements: {err}</div>}
-      <div style={CARD}>
-        {rows===null?(
-          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Loading…</div>
-        ):shown.length===0?(
-          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>{all.length===0?'No agreements yet. Send one from a call and it shows up here.':'Nothing in this filter.'}</div>
-        ):shown.map(a=>{
-          const st=AGR_STATUS[a.status]||AGR_STATUS.draft;
-          const pending=AGR_PENDING.includes(a.status);
-          const phone=a.prefill?.phone||''; const email=a.prefill?.email||'';
-          const outFor=ago(a.created_at);
-          return (
-            <div key={a.id} style={{padding:'10px 14px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-              <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
-                    <span style={{fontWeight:'500',fontSize:'13px'}}>{a.prefill?.business_name||'Agreement'}</span>
-                    <Badge color={st.color}>{st.label}</Badge>
-                    {pending&&outFor&&<span style={{fontSize:'11px',color:a.status==='draft'?'#64748b':'#854F0B',fontWeight:'500'}}>out {outFor}</span>}
-                  </div>
-                  <div style={{fontSize:'11px',color:'#64748b',marginTop:'3px',display:'flex',gap:'12px',flexWrap:'wrap'}}>
-                    {a.prefill?.contact_person&&<span>{a.prefill.contact_person}</span>}
-                    {phone&&<a href={`tel:${phone}`} style={{color:'#185FA5',textDecoration:'none'}}>{phone}</a>}
-                    {email&&<a href={`mailto:${email}`} style={{color:'#185FA5',textDecoration:'none'}}>{email}</a>}
-                    {!phone&&!email&&<span>No contact on file</span>}
-                  </div>
+      {rows===null?(
+        <div style={{...CARD,padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Loading…</div>
+      ):(
+        <div style={{display:'grid',gridTemplateColumns:'repeat(3,minmax(220px,1fr))',gap:'12px',overflowX:'auto',paddingBottom:'6px'}}>
+          {AGR_COLS.map(([key,label,color])=>{
+            const cc=CC[color]; const items=all.filter(a=>agrBucket(a)===key);
+            return (
+              <div key={key} style={{...CARD,background:'var(--color-background-secondary)',minWidth:0,alignSelf:'start'}}>
+                <div style={{padding:'10px 12px',borderBottom:`2px solid ${cc.br}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <span style={{fontWeight:'600',fontSize:'13px',color:cc.tx}}>{label}</span>
+                  <Badge color={color}>{items.length}</Badge>
                 </div>
-                {pending&&<button style={{...BTN(false),padding:'5px 10px',fontSize:'12px',whiteSpace:'nowrap'}} onClick={()=>setOpenId(openId===a.id?'':a.id)}>Remind</button>}
+                <div style={{padding:'8px',display:'flex',flexDirection:'column',gap:'8px',minHeight:'60px'}}>
+                  {items.length===0?(
+                    <div style={{fontSize:'12px',color:'#94a3b8',textAlign:'center',padding:'16px 8px'}}>Empty</div>
+                  ):items.map(a=>{
+                    const st=AGR_STATUS[a.status]||AGR_STATUS.draft; const open=openId===a.id;
+                    const phone=a.prefill?.phone||''; const email=a.prefill?.email||'';
+                    return (
+                      <div key={a.id} style={{background:'var(--color-background-primary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',overflow:'hidden'}}>
+                        <button onClick={()=>setOpenId(open?'':a.id)} style={{width:'100%',textAlign:'left',background:'transparent',border:'none',padding:'10px 11px',cursor:'pointer',fontFamily:'var(--font-sans)'}}>
+                          <div style={{fontWeight:'500',fontSize:'13px',color:'#0f172a'}}>{a.prefill?.business_name||'Agreement'}</div>
+                          <div style={{fontSize:'11px',marginTop:'3px',display:'flex',gap:'8px',flexWrap:'wrap'}}>
+                            {key==='signed'?<span style={{color:'#0F6E56',fontWeight:'500'}}>Signed</span>:<span style={{color:key==='remind'?'#A32D2D':'#854F0B',fontWeight:'500'}}>out {ago(a.created_at)}</span>}
+                            <span style={{color:'#64748b'}}>· {st.label}</span>
+                          </div>
+                        </button>
+                        {open&&(
+                          <div style={{padding:'0 11px 11px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+                            <div style={{fontSize:'11px',color:'#64748b',margin:'8px 0',display:'flex',flexDirection:'column',gap:'3px'}}>
+                              {a.prefill?.contact_person&&<span style={{color:'#0f172a'}}>{a.prefill.contact_person}</span>}
+                              {phone&&<a href={`tel:${phone}`} style={{color:'#185FA5',textDecoration:'none'}}>{phone}</a>}
+                              {email&&<a href={`mailto:${email}`} style={{color:'#185FA5',textDecoration:'none'}}>{email}</a>}
+                              {!phone&&!email&&<span>No contact on file</span>}
+                            </div>
+                            {key!=='signed'&&(
+                              <div style={{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap'}}>
+                                <span style={{fontSize:'11px',color:'#64748b'}}>Remind:</span>
+                                <button style={{...BTN(false),padding:'4px 10px',fontSize:'12px',opacity:(!phone||busy===a.id)?0.5:1}} disabled={!phone||busy===a.id} onClick={()=>remind(a,'sms')}>Text</button>
+                                <button style={{...BTN(true),padding:'4px 10px',fontSize:'12px',opacity:(!email||busy===a.id)?0.5:1}} disabled={!email||busy===a.id} onClick={()=>remind(a,'email')}>Email</button>
+                                {busy===a.id&&<span style={{fontSize:'11px',color:'#64748b'}}>Sending…</span>}
+                              </div>
+                            )}
+                            {note[a.id]&&<div style={{fontSize:'11px',color:note[a.id].includes('sent')?'#0F6E56':'#A32D2D',marginTop:'6px',fontWeight:'500'}}>{note[a.id]}</div>}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              {openId===a.id&&pending&&(
-                <div style={{display:'flex',gap:'6px',marginTop:'8px',alignItems:'center',flexWrap:'wrap'}}>
-                  <span style={{fontSize:'11px',color:'#64748b'}}>Send reminder:</span>
-                  <button style={{...BTN(false),padding:'4px 10px',fontSize:'12px',opacity:(!phone||busy===a.id)?0.5:1}} disabled={!phone||busy===a.id} onClick={()=>remind(a,'sms')}>Text</button>
-                  <button style={{...BTN(true),padding:'4px 10px',fontSize:'12px',opacity:(!email||busy===a.id)?0.5:1}} disabled={!email||busy===a.id} onClick={()=>remind(a,'email')}>Email</button>
-                  {busy===a.id&&<span style={{fontSize:'11px',color:'#64748b'}}>Sending…</span>}
-                </div>
-              )}
-              {note[a.id]&&<div style={{fontSize:'11px',color:note[a.id].includes('sent')?'#0F6E56':'#A32D2D',marginTop:'6px',fontWeight:'500'}}>{note[a.id]}</div>}
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
