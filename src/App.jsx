@@ -997,7 +997,7 @@ const REC_MIME = () => {
 const mmss = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}`;
 
 // ── Camera/mic recorder — always available; keeps EVERY take; review before submitting ──
-function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake }) {
+function CallRecorder({ call, callerName, onTakeSaved, onUseTake, onComplete, submittedTake }) {
   const [mediaMode,setMediaMode]=useState('video');
   const [camOn,setCamOn]=useState(false);
   const [recording,setRecording]=useState(false);
@@ -1083,7 +1083,8 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake 
           {review.take.mediaMode!=='audio'
             ? <video src={review.url} controls style={{width:'100%',borderRadius:'var(--border-radius-md)',display:'block',background:'#0f172a'}}/>
             : <audio src={review.url} controls style={{width:'100%'}}/>}
-          <div style={{fontSize:'12px',color:'#0F6E56',fontWeight:'600',marginTop:'8px'}}>✓ Take {review.take.take} saved &amp; selected · {mmss(review.take.durationSec)} · {review.take.sizeMB} MB — you’re done. Record again only if you want a better one.</div>
+          <div style={{fontSize:'12px',color:'#0F6E56',fontWeight:'600',marginTop:'8px'}}>✓ Take {review.take.take} saved · {mmss(review.take.durationSec)} · {review.take.sizeMB} MB. Tap “Use this recording” to finish, or record again for a better one.</div>
+          {review.take.durationSec<1&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'6px',lineHeight:1.5,fontWeight:'500'}}>This take looks empty (0 seconds). Please record again before completing.</div>}
           {review.take.sizeMB>REC_SIZE_WARN_MB&&<div style={{fontSize:'12px',color:'#854F0B',marginTop:'6px',lineHeight:1.5}}>Heads up — this one is large ({review.take.sizeMB} MB). It still saved fine, but for the confirmation you usually only need a short clip. Consider a quick “Record again” (or switch to Audio only) to keep it small.</div>}
         </div>
       ) : isVideo ? (
@@ -1104,7 +1105,7 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake 
       <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
         {review ? (
           <>
-            <span style={{display:'inline-flex',alignItems:'center',gap:'6px',fontSize:'13px',fontWeight:'600',color:'#0F6E56'}}><CheckCircle size={14}/>Saved &amp; selected</span>
+            <button style={{...BTN(true),opacity:review.take.durationSec<1?0.5:1}} disabled={review.take.durationSec<1} onClick={()=>{onUseTake(review.take);onComplete&&onComplete();}}><CheckCircle size={13}/>Use this recording — complete call</button>
             <button style={BTN(false)} onClick={recordAgain}><Circle size={13}/>Record again</button>
           </>
         ) : (
@@ -1214,9 +1215,9 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
   const addrText=addresses.map(addrLine).filter(Boolean).join(' • ')||'[address, city, state]';
   const offerText=offerDetails||'[offer details]';
 
-  // "Completed" requires an actual video recording of the confirmation
+  // "Completed" requires a recording of the confirmation — video OR audio both count as proof
   const submittedRec=(call.recordings||[]).find(r=>r.take===submittedTake);
-  const hasVideoTake=!!submittedRec && submittedRec.mediaMode!=='audio';
+  const hasRecording=!!submittedRec;
 
   // Profile header bits + the rest of what we already know about this lead
   const leadAddress=(call.addresses?.map(addrLine).filter(Boolean).join(' • '))||call.location||'';
@@ -1289,7 +1290,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     const details={ decisionMaker:dm, spokeTo, email, phone, business:businessName||call.business,
       businessType, category:businessType, addresses, location:loc||call.location||'', offerDetails };
     if(outcome==='completed'){
-      if(!hasVideoTake) return; // guarded by the disabled button too
+      if(!hasRecording) return; // guarded by the disabled button too
       commit({ status:'completed', verifyStatus:'pending', submittedTake, recordedAt:new Date().toISOString(), ...details });
     } else if(outcome==='needs_info'){
       commit({ status:'needs_info', ...(submittedTake!=null?{submittedTake}:{}), ...details, ...(emailed?{infoEmailedAt:new Date().toISOString()}:{}) });
@@ -1421,11 +1422,11 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
 
           {completeMode==='verbal'&&(
             <>
-              <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}><Video size={16} style={{flexShrink:0,marginTop:'1px'}}/><span>Be sure to record a video of you confirming the discount with them — a video is <b>required</b> to mark this Completed. Scroll down, record, and tap “Use this recording.”</span></div>
+              <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}><Video size={16} style={{flexShrink:0,marginTop:'1px'}}/><span>Record yourself confirming the discount with them — a recording is <b>required</b> to mark this Completed. Scroll down, record, then tap “Use this recording — complete call.” Video is best, but audio-only works too.</span></div>
               <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'12px'}}>Confirm their details</div>
               {detailsForm}
-              <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasVideoTake?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasVideoTake?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasVideoTake?'Video attached — this goes to your admin to verify and pay.':'No video attached yet — record one below to enable saving.'}</span></div>
-              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasVideoTake?1:0.5}} disabled={!hasVideoTake} onClick={save}><CheckCircle size={14}/>Save completed</button>
+              <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasRecording?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasRecording?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasRecording?'Recording attached — this goes to your admin to verify and pay.':'No recording yet — record one below (it completes the call automatically).'}</span></div>
+              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasRecording?1:0.5}} disabled={!hasRecording} onClick={save}><CheckCircle size={14}/>Save completed</button>
             </>
           )}
         </div>
@@ -1512,7 +1513,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
         </div>
         <div>
           <CallRecorder call={call} callerName={callerName} submittedTake={submittedTake}
-            onTakeSaved={take=>onAddRecordingTake(call.id,take)} onUseTake={take=>setSubmittedTake(take.take)}/>
+            onTakeSaved={take=>onAddRecordingTake(call.id,take)} onUseTake={take=>setSubmittedTake(take.take)} onComplete={save}/>
           <div style={{fontSize:'12px',color:'#64748b',marginTop:'10px',lineHeight:1.5}}>Put the call on <b>speakerphone</b> near your computer so the recording captures both voices. Every take is saved — you can re-record and pick the good one.</div>
         </div>
       </div>
