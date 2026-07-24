@@ -1722,19 +1722,24 @@ function CallerCRM({ myCalls, onOpenLog, onWorkQueue }) {
   );
 }
 
-// ── Agreements the rep has sent — track who hasn't signed yet ──
+// ── Agreements the rep has sent — compact CRM: status, how long out, contact, remind ──
 const AGR_STATUS = {
-  draft:  {label:'Draft — not sent',    color:'gray'},
-  sent:   {label:'Sent — awaiting open', color:'blue'},
-  viewed: {label:'Opened — not signed',  color:'amber'},
-  signed: {label:'Signed',               color:'teal'},
-  void:   {label:'Void',                 color:'red'},
+  draft:  {label:'Not sent', color:'gray'},
+  sent:   {label:'Sent',     color:'blue'},
+  viewed: {label:'Opened',   color:'amber'},
+  signed: {label:'Signed',   color:'teal'},
+  void:   {label:'Void',     color:'red'},
 };
 const AGR_PENDING = ['draft','sent','viewed'];
+const ago = iso => { if(!iso) return ''; const m=Math.floor((Date.now()-new Date(iso).getTime())/60000); if(m<1) return 'just now'; if(m<60) return m+'m'; const h=Math.floor(m/60); if(h<24) return h+'h'; return Math.floor(h/24)+'d'; };
+
 function CallerAgreements() {
   const [rows,setRows]=useState(null); // null = loading
   const [err,setErr]=useState('');
   const [filter,setFilter]=useState('pending');
+  const [openId,setOpenId]=useState('');   // row whose remind options are open
+  const [busy,setBusy]=useState('');       // id currently sending
+  const [note,setNote]=useState({});       // per-id feedback
   useEffect(()=>{
     let active=true;
     const fetchRows=async()=>{
@@ -1753,36 +1758,63 @@ function CallerAgreements() {
   const waiting=all.filter(a=>AGR_PENDING.includes(a.status)).length;
   const signed=all.filter(a=>a.status==='signed').length;
   const shown=all.filter(a=>filter==='all'?true:filter==='signed'?a.status==='signed':AGR_PENDING.includes(a.status));
-  const TABS=[['pending',`Waiting on (${waiting})`],['signed',`Signed (${signed})`],['all',`All (${all.length})`]];
+  const TABS=[['pending',`Waiting (${waiting})`],['signed',`Signed (${signed})`],['all',`All (${all.length})`]];
+  const remind=async(a,channel)=>{
+    const sendTo=channel==='sms'?(a.prefill?.phone||''):(a.prefill?.email||'');
+    if(!sendTo){ setNote(n=>({...n,[a.id]:'No '+(channel==='sms'?'phone':'email')+' on file.'})); return; }
+    setBusy(a.id); setNote(n=>({...n,[a.id]:''}));
+    try{
+      const {data,error}=await supabase.functions.invoke('agreement-send',{body:{agreementId:a.id,channel,sendTo,reminder:true}});
+      if(error){ let m=error.message; try{const b=await error.context?.json?.(); if(b?.error) m=b.error;}catch{ /* keep */ } throw new Error(m); }
+      if(data&&data.error) throw new Error(data.error);
+      setNote(n=>({...n,[a.id]:'Reminder sent.'})); setOpenId('');
+    }catch(e){ setNote(n=>({...n,[a.id]:channel==='sms'?'Texting unavailable — try email.':(e.message||'Could not send.')})); }
+    finally{ setBusy(''); }
+  };
   return (
     <div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:'10px',marginBottom:'16px'}}>
-        <Metric label="Waiting on" value={waiting} color="#854F0B"/>
-        <Metric label="Signed" value={signed} color="#0F6E56"/>
-        <Metric label="Total sent" value={all.length}/>
-      </div>
-      <div style={{display:'flex',gap:'6px',marginBottom:'14px',flexWrap:'wrap'}}>
-        {TABS.map(([k,label])=>(
-          <button key={k} onClick={()=>setFilter(k)} style={{...BTN(filter===k),padding:'6px 12px',fontSize:'12px'}}>{label}</button>
-        ))}
+      <div style={{fontSize:'13px',color:'#64748b',marginBottom:'12px'}}>Agreements you’ve sent. Chase anyone who hasn’t signed — tap their number to call, or send a quick reminder.</div>
+      <div style={{display:'flex',gap:'6px',marginBottom:'12px',flexWrap:'wrap'}}>
+        {TABS.map(([k,label])=>(<button key={k} onClick={()=>setFilter(k)} style={{...BTN(filter===k),padding:'6px 12px',fontSize:'12px'}}>{label}</button>))}
       </div>
       {err&&<div style={{background:'#FCEBEB',border:'0.5px solid #F09595',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#A32D2D',marginBottom:'14px'}}>Couldn’t load agreements: {err}</div>}
       <div style={CARD}>
-        <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Your agreements</span></div>
         {rows===null?(
-          <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Loading…</div>
+          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Loading…</div>
         ):shown.length===0?(
-          <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>{all.length===0?'No agreements yet. When you send one from a call, it shows up here.':'Nothing in this filter.'}</div>
+          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>{all.length===0?'No agreements yet. Send one from a call and it shows up here.':'Nothing in this filter.'}</div>
         ):shown.map(a=>{
           const st=AGR_STATUS[a.status]||AGR_STATUS.draft;
-          const when=(a.updated_at||a.created_at||'').split('T')[0];
+          const pending=AGR_PENDING.includes(a.status);
+          const phone=a.prefill?.phone||''; const email=a.prefill?.email||'';
+          const outFor=ago(a.created_at);
           return (
-            <div key={a.id} style={{display:'grid',gridTemplateColumns:'1fr auto',gap:'12px',alignItems:'center',padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-              <div style={{minWidth:0}}>
-                <div style={{fontWeight:'500',fontSize:'14px'}}>{a.prefill?.business_name||'Agreement'}</div>
-                <div style={{fontSize:'12px',color:'#64748b',marginTop:'2px'}}>{a.status==='signed'?'Signed':'Last update'} {fmtDate(when)}</div>
+            <div key={a.id} style={{padding:'10px 14px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+              <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}>
+                    <span style={{fontWeight:'500',fontSize:'13px'}}>{a.prefill?.business_name||'Agreement'}</span>
+                    <Badge color={st.color}>{st.label}</Badge>
+                    {pending&&outFor&&<span style={{fontSize:'11px',color:a.status==='draft'?'#64748b':'#854F0B',fontWeight:'500'}}>out {outFor}</span>}
+                  </div>
+                  <div style={{fontSize:'11px',color:'#64748b',marginTop:'3px',display:'flex',gap:'12px',flexWrap:'wrap'}}>
+                    {a.prefill?.contact_person&&<span>{a.prefill.contact_person}</span>}
+                    {phone&&<a href={`tel:${phone}`} style={{color:'#185FA5',textDecoration:'none'}}>{phone}</a>}
+                    {email&&<a href={`mailto:${email}`} style={{color:'#185FA5',textDecoration:'none'}}>{email}</a>}
+                    {!phone&&!email&&<span>No contact on file</span>}
+                  </div>
+                </div>
+                {pending&&<button style={{...BTN(false),padding:'5px 10px',fontSize:'12px',whiteSpace:'nowrap'}} onClick={()=>setOpenId(openId===a.id?'':a.id)}>Remind</button>}
               </div>
-              <Badge color={st.color}>{st.label}</Badge>
+              {openId===a.id&&pending&&(
+                <div style={{display:'flex',gap:'6px',marginTop:'8px',alignItems:'center',flexWrap:'wrap'}}>
+                  <span style={{fontSize:'11px',color:'#64748b'}}>Send reminder:</span>
+                  <button style={{...BTN(false),padding:'4px 10px',fontSize:'12px',opacity:(!phone||busy===a.id)?0.5:1}} disabled={!phone||busy===a.id} onClick={()=>remind(a,'sms')}>Text</button>
+                  <button style={{...BTN(true),padding:'4px 10px',fontSize:'12px',opacity:(!email||busy===a.id)?0.5:1}} disabled={!email||busy===a.id} onClick={()=>remind(a,'email')}>Email</button>
+                  {busy===a.id&&<span style={{fontSize:'11px',color:'#64748b'}}>Sending…</span>}
+                </div>
+              )}
+              {note[a.id]&&<div style={{fontSize:'11px',color:note[a.id].includes('sent')?'#0F6E56':'#A32D2D',marginTop:'6px',fontWeight:'500'}}>{note[a.id]}</div>}
             </div>
           );
         })}
