@@ -1036,18 +1036,21 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake 
     setRecording(false);
   };
 
-  // Every stop uploads immediately (nothing is ever lost) then goes to a review step.
+  // Every stop uploads immediately AND auto-selects the take — no extra "use this" click.
+  // The path carries a unique suffix so it can never collide (fixes "resource already exists").
   const save=async(mime)=>{
     setSaving(true); setError('');
     try{
       const ext=mime.includes('mp4')?'mp4':'webm';
       const blob=new Blob(chunksRef.current,{type:mime});
       const takeNum=takeCounter.current+1; takeCounter.current=takeNum;
-      const path=`calls/${slug(callerName)}/${slug(call.business)}/${today()}_${slug(call.business)}_${slug(callContactName(call))}_take${takeNum}.${ext}`;
-      const {error:upErr}=await supabase.storage.from(CALL_BUCKET).upload(path,blob,{contentType:mime,upsert:false});
+      const uniq=Date.now().toString(36)+Math.floor(Math.random()*1e6).toString(36); // guarantees a fresh path
+      const path=`calls/${slug(callerName)}/${slug(call.business)}/${today()}_${slug(call.business)}_${slug(callContactName(call))}_take${takeNum}_${uniq}.${ext}`;
+      const {error:upErr}=await supabase.storage.from(CALL_BUCKET).upload(path,blob,{contentType:mime,upsert:true});
       if(upErr) throw upErr;
       const take={recordingPath:path, recordingMime:mime, durationSec:elapsed, sizeMB:+(blob.size/1048576).toFixed(1), mediaMode, take:takeNum, recordedAt:new Date().toISOString()};
-      await onTakeSaved(take); // persisted to the lead right away — a fat-fingered redo never loses the original
+      await onTakeSaved(take);  // persisted to the lead right away — a fat-fingered redo never loses the original
+      onUseTake(take);          // and immediately made the official recording — no second step for the caller
       setReview({take, url:URL.createObjectURL(blob)});
     }catch(e){
       setError('Your recording was captured but the upload failed: '+(e.message||e)+'  —  Make sure the "'+CALL_BUCKET+'" storage bucket exists in Supabase.');
@@ -1072,7 +1075,7 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake 
           {review.take.mediaMode!=='audio'
             ? <video src={review.url} controls style={{width:'100%',borderRadius:'var(--border-radius-md)',display:'block',background:'#0f172a'}}/>
             : <audio src={review.url} controls style={{width:'100%'}}/>}
-          <div style={{fontSize:'12px',color:'#64748b',marginTop:'8px'}}>Take {review.take.take} · {mmss(review.take.durationSec)} · {review.take.sizeMB} MB — saved. Review it, then use it or record again.</div>
+          <div style={{fontSize:'12px',color:'#0F6E56',fontWeight:'600',marginTop:'8px'}}>✓ Take {review.take.take} saved &amp; selected · {mmss(review.take.durationSec)} · {review.take.sizeMB} MB — you’re done. Record again only if you want a better one.</div>
         </div>
       ) : isVideo ? (
         <div style={{position:'relative',background:'#0f172a',borderRadius:'var(--border-radius-md)',overflow:'hidden',aspectRatio:'4 / 3',marginBottom:'12px',display:'flex',alignItems:'center',justifyContent:'center'}}>
@@ -1092,7 +1095,7 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake 
       <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
         {review ? (
           <>
-            <button style={BTN(true)} onClick={()=>onUseTake(review.take)}><CheckCircle size={13}/>Use this recording</button>
+            <span style={{display:'inline-flex',alignItems:'center',gap:'6px',fontSize:'13px',fontWeight:'600',color:'#0F6E56'}}><CheckCircle size={14}/>Saved &amp; selected</span>
             <button style={BTN(false)} onClick={recordAgain}><Circle size={13}/>Record again</button>
           </>
         ) : (
