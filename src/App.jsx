@@ -1111,14 +1111,12 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, submittedTake 
 }
 
 // ── Log Call cockpit — one focused view per lead: record anytime, read the script, pick an outcome ──
-// Two "completed" entry points (form / verbal) sit right in the outcome row.
 const OUTCOMES = [
-  {key:'form',          label:'Send agreement', sub:'Form — they sign',     color:'teal',  Icon:FileText, mode:'form'},
-  {key:'verbal',        label:'Verbal',         sub:'Record the call',       color:'teal',  Icon:Video,    mode:'verbal'},
-  {key:'needs_info',    label:'Needs more info',sub:'Warm — follow up',       color:'amber', Icon:Info},
-  {key:'callback',      label:'Call back',      sub:'Schedule date & time',   color:'blue',  Icon:Clock},
-  {key:'no_answer',     label:'No answer',      sub:'Stays in rotation',      color:'gray',  Icon:PhoneOff},
-  {key:'not_interested',label:'Not interested', sub:'Keep their info',        color:'red',   Icon:XCircle},
+  ['completed',     'Completed',      'teal',  'Agreed — form or verbal', CheckCircle],
+  ['needs_info',    'Needs more info','amber', 'Warm — follow up',        Info],
+  ['callback',      'Call back',      'blue',  'Schedule date & time',    Clock],
+  ['no_answer',     'No answer',      'gray',  'Stays in rotation',       PhoneOff],
+  ['not_interested','Not interested', 'red',   'Keep their info',         XCircle],
 ];
 // Standardized business-type / category options
 const BUSINESS_TYPES = ['Fast food','Pizza','Casual dining','Bakery/coffee shop','Healthy','Ethnic','International','Food truck','High-end','Nightlife','Other'];
@@ -1365,26 +1363,35 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
       {/* Outcome buttons — the very first action */}
       <div style={{fontWeight:'600',fontSize:'16px',margin:'0 0 12px'}}>How did the call go?</div>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:'12px',marginBottom:'16px'}}>
-        {OUTCOMES.map(o=>{
-          const c=CC[o.color]; const Icon=o.Icon;
-          const on = o.mode ? (outcome==='completed'&&completeMode===o.mode) : (outcome===o.key);
-          const pick = () => { if(o.mode){ setOutcome('completed'); setCompleteMode(o.mode); } else { setOutcome(o.key); setCompleteMode(null); } };
+        {OUTCOMES.map(([key,label,color,sub,Icon])=>{
+          const on=outcome===key; const c=CC[color];
           return (
-            <button key={o.key} onClick={pick}
+            <button key={key} onClick={()=>{ setOutcome(key); if(key!=='completed') setCompleteMode(null); }}
               style={{aspectRatio:'1 / 1',minHeight:'138px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:'10px',textAlign:'center',padding:'14px',cursor:'pointer',borderRadius:'var(--border-radius-lg)',
                 border:`1px solid ${on?c.br:'var(--color-border-tertiary)'}`,background:on?c.bg:'var(--color-background-primary)',
                 boxShadow:on?`0 0 0 2px ${c.br}`:'none',fontFamily:'var(--font-sans)',transition:'all 0.12s'}}>
               <Icon size={28} color={on?c.tx:'#64748b'} strokeWidth={1.75}/>
-              <div style={{fontSize:'14px',fontWeight:'600',color:on?c.tx:'#0f172a'}}>{o.label}</div>
-              <div style={{fontSize:'11px',color:'#64748b',lineHeight:1.3}}>{o.sub}</div>
+              <div style={{fontSize:'14px',fontWeight:'600',color:on?c.tx:'#0f172a'}}>{label}</div>
+              <div style={{fontSize:'11px',color:'#64748b',lineHeight:1.3}}>{sub}</div>
             </button>
           );
         })}
       </div>
 
-      {outcome==='completed'&&completeMode==='form'&&(
+      {(outcome===null||outcome==='completed')&&(
         <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
-          {formPhase==='details'?(
+          <div style={{fontSize:'13.5px',lineHeight:1.6,color:'#0f172a',background:'var(--color-background-secondary)',borderLeft:'3px solid #1D9E75',borderRadius:'8px',padding:'12px 14px',marginBottom:'14px'}}>Great — would you prefer we confirm this by a quick <b>form</b> I text or email you, or a <b>verbal</b> confirmation right now?</div>
+          {/* Form / Verbal choice — always here; the line above is the rep's script */}
+          <div style={{display:'flex',gap:'10px',marginBottom:'14px'}}>
+            <button style={{...BTN(completeMode==='form'),flex:1,justifyContent:'center'}} onClick={()=>{setOutcome('completed');setCompleteMode('form');}}><FileText size={14}/>Send agreement (form)</button>
+            <button style={{...BTN(completeMode==='verbal'),flex:1,justifyContent:'center'}} onClick={()=>{setOutcome('completed');setCompleteMode('verbal');}}><Video size={14}/>Verbal — record</button>
+          </div>
+
+          {completeMode===null&&(
+            <div style={{fontSize:'13px',color:'#64748b',padding:'2px'}}>Pick <b>form</b> or <b>verbal</b> above once they decide.</div>
+          )}
+
+          {completeMode==='form'&&(formPhase==='details'?(
             <>
               <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>Enter everything you have — it pre-fills the form so they just confirm it, not fill it out.</div>
               {detailsForm}
@@ -1398,17 +1405,17 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
               <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'12px'}} onClick={saveFormCompleted}><CheckCircle size={14}/>Save — mark completed</button>
               <div style={{fontSize:'12px',color:'#64748b',marginTop:'8px',lineHeight:1.5}}>Once they sign (you’ll see it update above), mark this completed — the signed agreement is the record, no video needed.</div>
             </>
-          )}
-        </div>
-      )}
+          ))}
 
-      {outcome==='completed'&&completeMode==='verbal'&&(
-        <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
-          <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}><Video size={16} style={{flexShrink:0,marginTop:'1px'}}/><span>Be sure to record a video of you confirming the discount with them — a video is <b>required</b> to mark this Completed. Scroll down, record, and tap “Use this recording.”</span></div>
-          <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'12px'}}>Confirm their details</div>
-          {detailsForm}
-          <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasVideoTake?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasVideoTake?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasVideoTake?'Video attached — this goes to your admin to verify and pay.':'No video attached yet — record one below to enable saving.'}</span></div>
-          <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasVideoTake?1:0.5}} disabled={!hasVideoTake} onClick={save}><CheckCircle size={14}/>Save completed</button>
+          {completeMode==='verbal'&&(
+            <>
+              <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}><Video size={16} style={{flexShrink:0,marginTop:'1px'}}/><span>Be sure to record a video of you confirming the discount with them — a video is <b>required</b> to mark this Completed. Scroll down, record, and tap “Use this recording.”</span></div>
+              <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'12px'}}>Confirm their details</div>
+              {detailsForm}
+              <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasVideoTake?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasVideoTake?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasVideoTake?'Video attached — this goes to your admin to verify and pay.':'No video attached yet — record one below to enable saving.'}</span></div>
+              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasVideoTake?1:0.5}} disabled={!hasVideoTake} onClick={save}><CheckCircle size={14}/>Save completed</button>
+            </>
+          )}
         </div>
       )}
       {outcome==='needs_info'&&(
