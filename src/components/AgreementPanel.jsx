@@ -29,6 +29,7 @@ export default function AgreementPanel({
   defaultPhone = "",
   defaultEmail = "",
   onVerbal,
+  onBack,
   initialStep = "ask",
 }) {
   const [step, setStep] = useState(initialStep);
@@ -177,7 +178,7 @@ export default function AgreementPanel({
             >
               {sending ? "Sending…" : "Send now"}
             </button>
-            <button style={secondary} onClick={() => setStep("ask")}>
+            <button style={secondary} onClick={() => (onBack ? onBack() : setStep("ask"))}>
               Back
             </button>
           </div>
