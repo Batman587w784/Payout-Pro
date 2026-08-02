@@ -1990,6 +1990,106 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
   );
 }
 
+// ── Super-admin: guaranteed discounts — where every confirmed deal is, exportable, with the video ──
+function AdminDiscountsView({ employees, calls }) {
+  const [q,setQ]=useState('');
+  const nameOf=id=>employees.find(e=>e.id===id)?.name||'Unassigned';
+  const area=c=>[leadCity(c),leadState(c)].filter(Boolean).join(', ')||c.location||'—';
+  const dateOf=c=>(c.payout?.postedAt||c.recordedAt||c.createdAt||'').split('T')[0];
+  const statusText=c=>c.verifyStatus==='approved'?'Approved':c.agreementId?'Signed':'Pending review';
+  // A "guaranteed" discount = the merchant agreed on the call (completed/recorded) or it's admin-approved.
+  const discounts=calls.filter(c=>leadDone(c)||c.verifyStatus==='approved').sort((a,b)=>(dateOf(b)||'').localeCompare(dateOf(a)||''));
+  const term=q.trim().toLowerCase();
+  const filtered=!term?discounts:discounts.filter(c=>[c.business,area(c),nameOf(c.callerId),c.offerDetails,c.group].filter(Boolean).join(' ').toLowerCase().includes(term));
+  const approvedCount=discounts.filter(c=>c.verifyStatus==='approved').length;
+
+  const exportPDF=()=>{
+    const esc=s=>String(s==null?'':s).replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
+    const rows=filtered.map(c=>`<tr><td>${esc(c.business)}</td><td>${esc(area(c))}</td><td>${esc(c.offerDetails||'—')}</td><td>${esc(nameOf(c.callerId))}</td><td>${esc(dateOf(c)||'—')}</td><td>${esc(statusText(c))}</td></tr>`).join('');
+    const html=`<!doctype html><html><head><meta charset="utf-8"><title>Guaranteed Discounts — Tailgate</title><style>body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;padding:28px}h1{font-size:20px;margin:0 0 4px}.sub{color:#64748b;font-size:12px;margin-bottom:18px}table{width:100%;border-collapse:collapse;font-size:12px}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #e2e8f0;vertical-align:top}th{background:#f1f5f9;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#475569}</style></head><body><h1>Guaranteed Discounts</h1><div class="sub">Tailgate Payday &middot; exported ${esc(today())} &middot; ${filtered.length} discount${filtered.length===1?'':'s'}${term?` &middot; filtered by "${esc(q.trim())}"`:''}</div><table><thead><tr><th>Business</th><th>Area</th><th>Discount</th><th>Caller</th><th>Date</th><th>Status</th></tr></thead><tbody>${rows||'<tr><td colspan="6">No discounts yet.</td></tr>'}</tbody></table></body></html>`;
+    const w=window.open('','_blank'); if(!w){ alert('Please allow pop-ups to export the PDF.'); return; }
+    w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>{try{w.print();}catch{/* user can print manually */}},350);
+  };
+
+  return (
+    <div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px',gap:'10px',flexWrap:'wrap'}}>
+        <div>
+          <h3 style={{margin:0,fontSize:'16px',fontWeight:'500'}}>Guaranteed discounts</h3>
+          <div style={{fontSize:'13px',color:'#64748b',marginTop:'2px'}}>Every confirmed merchant discount and where it is — {approvedCount} approved · {discounts.length} total. Export to PDF or open any approved recording.</div>
+        </div>
+        <button style={BTN(true)} onClick={exportPDF}><Download size={14}/>Export PDF</button>
+      </div>
+      <div style={{...CARD,padding:'12px 14px',marginBottom:'14px'}}>
+        <input style={INP} value={q} onChange={e=>setQ(e.target.value)} placeholder="Search discounts — business, area, caller, or offer…"/>
+      </div>
+      <div style={CARD}>
+        <div style={{display:'grid',gridTemplateColumns:'1.4fr 1fr 1fr auto',gap:'12px',padding:'10px 16px',borderBottom:'0.5px solid var(--color-border-tertiary)',fontSize:'11px',fontWeight:'600',textTransform:'uppercase',letterSpacing:'0.4px',color:'#64748b'}}>
+          <span>Business / discount</span><span>Area</span><span>Caller · date</span><span style={{textAlign:'right'}}>Status</span>
+        </div>
+        {filtered.length===0?(
+          <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>{discounts.length===0?'No confirmed discounts yet — they appear here once a caller completes a call.':'No discounts match your search.'}</div>
+        ):filtered.map(c=><DiscountRow key={c.id} call={c} callerName={nameOf(c.callerId)} area={area(c)} date={dateOf(c)} status={statusText(c)}/>)}
+      </div>
+    </div>
+  );
+}
+
+function DiscountRow({ call, callerName, area, date, status }) {
+  const [open,setOpen]=useState(false);
+  const [url,setUrl]=useState(''); const [loading,setLoading]=useState(false); const [err,setErr]=useState('');
+  const recs=call.recordings?.length?call.recordings:(call.recordingPath?[{recordingPath:call.recordingPath,mediaMode:call.mediaMode,take:1}]:[]);
+  const rec=recs.find(r=>r.take===call.submittedTake)||recs[recs.length-1]||null;
+  const isVideo=rec?.mediaMode!=='audio';
+  const statusColor=status==='Approved'?'teal':status==='Signed'?'blue':'amber';
+  const dmName=[call.decisionMaker?.firstName,call.decisionMaker?.lastName].filter(Boolean).join(' ')||call.contact||call.spokeTo;
+  const play=async()=>{
+    if(url){ setUrl(''); return; }
+    if(!rec) return;
+    setLoading(true); setErr('');
+    try{ const {data,error}=await supabase.storage.from(CALL_BUCKET).createSignedUrl(rec.recordingPath,3600); if(error) throw error; setUrl(data.signedUrl); }
+    catch(e){ setErr('Could not load recording: '+(e.message||e)); }
+    finally{ setLoading(false); }
+  };
+  return (
+    <div style={{borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+      <div onClick={()=>setOpen(o=>!o)} style={{display:'grid',gridTemplateColumns:'1.4fr 1fr 1fr auto',gap:'12px',alignItems:'center',padding:'12px 16px',cursor:'pointer'}}>
+        <div style={{minWidth:0}}>
+          <div style={{fontSize:'14px',fontWeight:'500'}}>{call.business||'—'}</div>
+          <div style={{fontSize:'12px',color:'#64748b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{call.offerDetails||'Discount details on the recording'}</div>
+        </div>
+        <div style={{fontSize:'12px',color:'#64748b',minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}><MapPin size={11} style={{verticalAlign:'-1px',marginRight:'3px'}}/>{area}</div>
+        <div style={{fontSize:'12px',color:'#64748b'}}>{callerName}{date?` · ${fmtDate(date)}`:''}</div>
+        <div style={{display:'flex',alignItems:'center',gap:'8px',justifyContent:'flex-end'}}>
+          {call.payout?.amount!=null&&<span style={{fontFamily:'var(--font-mono)',fontSize:'12px',color:'#0F6E56'}}>{fmt$(call.payout.amount)}</span>}
+          <Badge color={statusColor}>{status}</Badge>
+          {open?<ChevronUp size={14} color="var(--color-text-secondary)"/>:<ChevronDown size={14} color="var(--color-text-secondary)"/>}
+        </div>
+      </div>
+      {open&&(
+        <div style={{padding:'2px 16px 14px 16px',background:'var(--color-background-secondary)'}}>
+          <div style={{fontSize:'12px',color:'#0f172a',lineHeight:1.7,padding:'10px 0'}}>
+            {call.offerDetails&&<div><span style={{color:'#64748b'}}>Discount: </span>{call.offerDetails}</div>}
+            {(dmName||call.email||call.phone)&&<div><span style={{color:'#64748b'}}>Contact: </span>{[dmName,call.phone,call.email].filter(Boolean).join(' · ')}</div>}
+            {call.group&&<div><span style={{color:'#64748b'}}>Group: </span>{call.group}</div>}
+          </div>
+          {rec?(
+            <>
+              <button style={BTN(false)} onClick={play} disabled={loading}><Play size={13}/>{loading?'Loading…':url?'Hide recording':'Pull up the recording'}</button>
+              {err&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'8px'}}>{err}</div>}
+              {url&&(isVideo
+                ? <video src={url} controls style={{width:'100%',maxWidth:'420px',borderRadius:'var(--border-radius-md)',margin:'10px 0 0',display:'block'}}/>
+                : <audio src={url} controls style={{width:'100%',margin:'10px 0 0'}}/>)}
+            </>
+          ):(
+            <div style={{fontSize:'12px',color:call.agreementId?'#185FA5':'#854F0B'}}>{call.agreementId?'Completed via signed e-agreement (no video).':'No recording attached to this discount.'}</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const Bar = ({pct,color='#1D9E75'}) => <div style={{height:'6px',background:'var(--color-border-tertiary)',borderRadius:'3px',overflow:'hidden'}}><div style={{width:`${Math.min(100,pct)}%`,height:'100%',background:color,borderRadius:'3px'}}/></div>;
 const leadContacted = c => c.status!=='to_call';
 const leadDone = c => c.status==='completed'||c.status==='interested'||c.status==='recorded';
@@ -2363,6 +2463,27 @@ export default function TailgatePayday() {
   const setD=v=>{setDeals(v);saveS('po_deals',v);};
   const setA=v=>{setAssignments(v);saveS('po_asgn',v);};
   const setC=v=>{setCalls(v);saveS('po_calls',v);};
+
+  // Keep every open browser in sync — pull the shared lead list every 12s so when one
+  // caller claims a lead (any outcome), it drops off everyone else's page shortly after.
+  useEffect(()=>{
+    if(!session) return;
+    const iv=setInterval(async()=>{
+      const c=await loadS('po_calls');
+      if(Array.isArray(c)) setCalls(prev=>JSON.stringify(prev)===JSON.stringify(c)?prev:c);
+    },12000);
+    return ()=>clearInterval(iv);
+  },[session]);
+
+  // Per-lead write that MERGES against the freshest server copy before saving, so two
+  // callers editing different leads in the same shared blob never overwrite each other.
+  const patchCall=async(id,patchOrFn)=>{
+    const apply=list=>list.map(c=>{ if(c.id!==id) return c; const p=typeof patchOrFn==='function'?patchOrFn(c):patchOrFn; return {...c,...p}; });
+    setCalls(cur=>apply(cur)); // optimistic — UI updates instantly
+    const server=await loadS('po_calls');
+    const next=apply(Array.isArray(server)?server:calls);
+    setCalls(next); saveS('po_calls',next);
+  };
   const setSU=v=>{setSignups(v);saveS('po_signups',v);};
   const setO=v=>{setOrgs(v);saveS('po_orgs',v);};
   const addOrg=o=>{ setO([...orgs,{...o,id:genId(),createdAt:new Date().toISOString()}]); setModal(null); };
@@ -2378,7 +2499,7 @@ export default function TailgatePayday() {
   // Merchant call assignments / mini-CRM
   const addCall=rec=>{ setC([...calls,{...rec,id:genId(),status:'to_call',createdAt:new Date().toISOString()}]); setModal(null); };
   const addLeads=(leads,callerIds)=>{ const ls=leads.map(l=>({...l,id:genId(),callerIds,status:'to_call',createdAt:new Date().toISOString()})); setC([...calls,...ls]); setModal(null); };
-  const updateCall=(id,patch)=>setC(calls.map(c=>c.id===id?{...c,...patch}:c));
+  const updateCall=(id,patch)=>patchCall(id,patch); // merge-write so caller claims survive concurrent edits
   // Super-admin group edit: rename the group, reassign its caller pool, and set a due date — applied to every lead in that group.
   const updateGroup=(groupKey,{name,callerIds,due})=>{
     const nm=(name||'').trim();
@@ -2386,7 +2507,7 @@ export default function TailgatePayday() {
     setModal(null);
   };
   // Every recorded take is persisted immediately so a redo can never lose the original
-  const addRecordingTake=(id,take)=>setC(calls.map(c=>c.id===id?{...c,recordings:[...(c.recordings||[]),take]}:c));
+  const addRecordingTake=(id,take)=>patchCall(id,prev=>({recordings:[...(prev.recordings||[]),take]}));
   const rejectCall=id=>setC(calls.map(c=>c.id===id?{...c,verifyStatus:'rejected'}:c));
   const markTouch=id=>setC(calls.map(c=>{ if(c.id!==id) return c; const done=(c.followUp?.touchesDone||0)+1; return {...c,followUp:{touchesDone:done,nextDue:done>=FOLLOWUP_TOUCHES?null:addDays(today(),2)}}; }));
   const deleteCall=id=>setC(calls.filter(c=>c.id!==id));
@@ -2443,7 +2564,7 @@ export default function TailgatePayday() {
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#64748b',fontSize:'14px'}}>Loading…</div>;
   if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess}/>;
 
-  const TABS=[['employees','Employees',Users],['orgs','Organizations',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
+  const TABS=[['employees','Employees',Users],['orgs','Organizations',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['discounts','Discounts',MapPin],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
 
   return (
     <div style={{padding:'20px',maxWidth:'980px',margin:'0 auto',fontFamily:'var(--font-sans)'}}>
@@ -2474,6 +2595,7 @@ export default function TailgatePayday() {
       {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
       {tab==='payroll'&&<PayrollView employees={employees} deals={deals} assignments={assignments}/>}
       {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})} onEditGroup={(groupKey,data)=>setModal({type:'editGroup',data:{groupKey,...data}})}/>}
+      {tab==='discounts'&&<AdminDiscountsView employees={employees} calls={calls}/>}
 
       {modal?.type==='addEmp'&&<AddEmployeeModal initialEmail={modal.data?.email} onAdd={addEmployee} onClose={()=>setModal(null)}/>}
       {modal?.type==='addOrg'&&<AddOrgModal onAdd={addOrg} onClose={()=>setModal(null)}/>}
