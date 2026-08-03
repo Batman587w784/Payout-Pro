@@ -995,6 +995,18 @@ const REC_MIME = () => {
   return types.find(t=>{try{return MediaRecorder.isTypeSupported(t);}catch{return false;}}) || '';
 };
 const mmss = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+const UPLOAD_MAX_MB = 50; // Supabase Storage default per-file limit
+// Read a media file's length so an uploaded video shows its duration (and isn't flagged "empty")
+const mediaDuration = file => new Promise(res=>{
+  try{
+    const el=document.createElement((file.type||'').startsWith('audio')?'audio':'video');
+    el.preload='metadata';
+    const done=d=>{ try{URL.revokeObjectURL(el.src);}catch{/* noop */} res(Number.isFinite(d)&&d>0?Math.round(d):0); };
+    el.onloadedmetadata=()=>done(el.duration);
+    el.onerror=()=>done(0);
+    el.src=URL.createObjectURL(file);
+  }catch{ res(0); }
+});
 
 // ── Camera/mic recorder — always available; keeps EVERY take; review before submitting ──
 function CallRecorder({ call, callerName, onTakeSaved, onUseTake, onComplete, submittedTake }) {
@@ -1005,7 +1017,7 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, onComplete, su
   const [saving,setSaving]=useState(false);
   const [error,setError]=useState('');
   const [review,setReview]=useState(null); // {take, url} of the take just captured
-  const videoRef=useRef(null), streamRef=useRef(null), recRef=useRef(null), chunksRef=useRef([]), timerRef=useRef(null);
+  const videoRef=useRef(null), streamRef=useRef(null), recRef=useRef(null), chunksRef=useRef([]), timerRef=useRef(null), fileRef=useRef(null);
   const takeCounter=useRef(call.recordings?.length||0); // continue numbering across redos
 
   const stopStream=()=>{ if(streamRef.current){streamRef.current.getTracks().forEach(t=>t.stop());streamRef.current=null;} };
@@ -1065,8 +1077,35 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, onComplete, su
     }finally{ setSaving(false); }
   };
 
+  // Let the caller upload their own video/audio file instead of recording in-app.
+  // Runs through the exact same pipeline: unique path, saved as a take, auto-selected.
+  const uploadFile=async(file)=>{
+    if(!file) return;
+    setSaving(true); setError('');
+    try{
+      const sizeMB=+(file.size/1048576).toFixed(1);
+      if(file.size>UPLOAD_MAX_MB*1048576) throw new Error(`This file is ${sizeMB} MB — the limit is ${UPLOAD_MAX_MB} MB. Trim it, lower its quality, or record in the app instead.`);
+      const isAud=(file.type||'').startsWith('audio');
+      const ext=(file.name.split('.').pop()||'').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,4)||(isAud?'m4a':'mp4');
+      const dur=await mediaDuration(file);
+      const takeNum=takeCounter.current+1; takeCounter.current=takeNum;
+      const uniq=Date.now().toString(36)+Math.floor(Math.random()*1e6).toString(36);
+      const path=`calls/${slug(callerName)}/${slug(call.business)}/${today()}_${slug(call.business)}_${slug(callContactName(call))}_take${takeNum}_upload_${uniq}.${ext}`;
+      const {error:upErr}=await supabase.storage.from(CALL_BUCKET).upload(path,file,{contentType:file.type||undefined,upsert:true});
+      if(upErr) throw upErr;
+      const take={recordingPath:path, recordingMime:file.type||'', durationSec:dur, sizeMB, mediaMode:isAud?'audio':'video', take:takeNum, uploaded:true, recordedAt:new Date().toISOString()};
+      await onTakeSaved(take);
+      onUseTake(take);
+      setReview({take, url:URL.createObjectURL(file)});
+    }catch(e){
+      setError('Could not upload that file: '+(e.message||e));
+    }finally{ setSaving(false); if(fileRef.current) fileRef.current.value=''; }
+  };
+
   const recordAgain=()=>{ if(review?.url) URL.revokeObjectURL(review.url); setReview(null); };
   const isVideo = mediaMode==='video';
+  // A live 0-second take is empty (0 MB); an uploaded file with real bytes never is.
+  const emptyTake = !!review && review.take.durationSec<1 && (review.take.sizeMB||0)<0.05;
 
   return (
     <div style={{...CARD,padding:'18px'}}>
@@ -1083,8 +1122,8 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, onComplete, su
           {review.take.mediaMode!=='audio'
             ? <video src={review.url} controls style={{width:'100%',borderRadius:'var(--border-radius-md)',display:'block',background:'#0f172a'}}/>
             : <audio src={review.url} controls style={{width:'100%'}}/>}
-          <div style={{fontSize:'12px',color:'#0F6E56',fontWeight:'600',marginTop:'8px'}}>✓ Take {review.take.take} saved · {mmss(review.take.durationSec)} · {review.take.sizeMB} MB. Tap “Use this recording” to finish, or record again for a better one.</div>
-          {review.take.durationSec<1&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'6px',lineHeight:1.5,fontWeight:'500'}}>This take looks empty (0 seconds). Please record again before completing.</div>}
+          <div style={{fontSize:'12px',color:'#0F6E56',fontWeight:'600',marginTop:'8px'}}>✓ {review.take.uploaded?'Uploaded video':'Take '+review.take.take} saved · {mmss(review.take.durationSec)} · {review.take.sizeMB} MB. Tap “Use this recording” to finish, or {review.take.uploaded?'upload/record a different one':'record again for a better one'}.</div>
+          {emptyTake&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'6px',lineHeight:1.5,fontWeight:'500'}}>This take looks empty (0 seconds). Please record or upload again before completing.</div>}
           {review.take.sizeMB>REC_SIZE_WARN_MB&&<div style={{fontSize:'12px',color:'#854F0B',marginTop:'6px',lineHeight:1.5}}>Heads up — this one is large ({review.take.sizeMB} MB). It still saved fine, but for the confirmation you usually only need a short clip. Consider a quick “Record again” (or switch to Audio only) to keep it small.</div>}
         </div>
       ) : isVideo ? (
@@ -1105,7 +1144,7 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, onComplete, su
       <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
         {review ? (
           <>
-            <button style={{...BTN(true),opacity:review.take.durationSec<1?0.5:1}} disabled={review.take.durationSec<1} onClick={()=>{onUseTake(review.take);onComplete&&onComplete();}}><CheckCircle size={13}/>Use this recording — complete call</button>
+            <button style={{...BTN(true),opacity:emptyTake?0.5:1}} disabled={emptyTake} onClick={()=>{onUseTake(review.take);onComplete&&onComplete();}}><CheckCircle size={13}/>Use this recording — complete call</button>
             <button style={BTN(false)} onClick={recordAgain}><Circle size={13}/>Record again</button>
           </>
         ) : (
@@ -1113,7 +1152,9 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, onComplete, su
             {!camOn&&!recording&&<button style={BTN(false)} onClick={enable}>{isVideo?<Video size={14}/>:<Play size={14}/>}Turn on {isVideo?'camera':'mic'}</button>}
             {camOn&&!recording&&!saving&&<button style={BTN(true)} onClick={start}><Circle size={13}/>Start recording</button>}
             {recording&&<button style={{...BTN(true),background:'#dc2626',color:'#fff'}} onClick={stop}><Square size={12}/>Stop</button>}
+            {!recording&&!saving&&<button style={BTN(false)} onClick={()=>fileRef.current?.click()}><Upload size={14}/>Upload a video</button>}
             {saving&&<div style={{fontSize:'13px',color:'#64748b'}}>Uploading…</div>}
+            <input ref={fileRef} type="file" accept="video/*,audio/*" style={{display:'none'}} onChange={e=>uploadFile(e.target.files?.[0])}/>
           </>
         )}
         {submittedTake!=null&&<span style={{marginLeft:'auto'}}><Badge color="teal">Using take {submittedTake}</Badge></span>}
