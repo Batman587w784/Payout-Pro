@@ -1009,7 +1009,7 @@ const mediaDuration = file => new Promise(res=>{
 });
 
 // ── Camera/mic recorder — always available; keeps EVERY take; review before submitting ──
-function CallRecorder({ call, callerName, onTakeSaved, onUseTake, onComplete, submittedTake }) {
+function CallRecorder({ call, callerName, onTakeSaved, onUseTake, onComplete, canComplete=true, completeHint, submittedTake }) {
   const [mediaMode,setMediaMode]=useState('video');
   const [camOn,setCamOn]=useState(false);
   const [recording,setRecording]=useState(false);
@@ -1144,8 +1144,9 @@ function CallRecorder({ call, callerName, onTakeSaved, onUseTake, onComplete, su
       <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap'}}>
         {review ? (
           <>
-            <button style={{...BTN(true),opacity:emptyTake?0.5:1}} disabled={emptyTake} onClick={()=>{onUseTake(review.take);onComplete&&onComplete();}}><CheckCircle size={13}/>Use this recording — complete call</button>
+            <button style={{...BTN(true),opacity:emptyTake||!canComplete?0.5:1}} disabled={emptyTake||!canComplete} onClick={()=>{onUseTake(review.take);onComplete&&onComplete();}}><CheckCircle size={13}/>Use this recording — complete call</button>
             <button style={BTN(false)} onClick={recordAgain}><Circle size={13}/>Record again</button>
+            {!canComplete&&!emptyTake&&completeHint&&<div style={{width:'100%',fontSize:'12px',color:'#A32D2D',marginTop:'4px',fontWeight:'500'}}>{completeHint}</div>}
           </>
         ) : (
           <>
@@ -1259,6 +1260,8 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
   // "Completed" requires a recording of the confirmation — video OR audio both count as proof
   const submittedRec=(call.recordings||[]).find(r=>r.take===submittedTake);
   const hasRecording=!!submittedRec;
+  // …and the caller must type what discount they actually secured before completing.
+  const hasOffer=offerDetails.trim().length>0;
 
   // Profile header bits + the rest of what we already know about this lead
   const leadAddress=(call.addresses?.map(addrLine).filter(Boolean).join(' • '))||call.location||'';
@@ -1314,6 +1317,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     return data.id;
   };
   const startForm=async()=>{
+    if(!hasOffer){ setAgreementErr('Enter the discount details (what they agreed to) above before continuing.'); return; }
     if(agreementId){ setFormPhase('send'); return; } // reuse the draft; don't create a second
     setCreatingAgr(true); setAgreementErr('');
     try{ const id=await createAgreement(); setAgreementId(id); setFormPhase('send'); }
@@ -1321,6 +1325,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     finally{ setCreatingAgr(false); }
   };
   const saveFormCompleted=()=>{
+    if(!hasOffer) return; // discount details are required
     const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
     commit({ status:'completed', verifyStatus:'pending', agreementId, decisionMaker:dm, spokeTo, email, phone,
       business:businessName||call.business, businessType, category:businessType, addresses, location:loc||call.location||'', offerDetails });
@@ -1331,7 +1336,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     const details={ decisionMaker:dm, spokeTo, email, phone, business:businessName||call.business,
       businessType, category:businessType, addresses, location:loc||call.location||'', offerDetails };
     if(outcome==='completed'){
-      if(!hasRecording) return; // guarded by the disabled button too
+      if(!hasRecording||!hasOffer) return; // both guarded by the disabled button too
       commit({ status:'completed', verifyStatus:'pending', submittedTake, recordedAt:new Date().toISOString(), ...details });
     } else if(outcome==='needs_info'){
       commit({ status:'needs_info', ...(submittedTake!=null?{submittedTake}:{}), ...details, ...(emailed?{infoEmailedAt:new Date().toISOString()}:{}) });
@@ -1370,7 +1375,8 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
           </div>
         ))}
         <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px',marginBottom:'12px'}} onClick={addAddr}><Plus size={12}/>Add location</button>
-        <Field label="Offer / discount details (enter what they agreed to)"><textarea style={{...INP,minHeight:'70px',resize:'vertical'}} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)}/></Field>
+        <Field label={<span>Offer / discount details — what they agreed to <span style={{color:'#A32D2D'}}>*required</span></span>}><textarea style={{...INP,minHeight:'70px',resize:'vertical',...(outcome==='completed'&&!hasOffer?{borderColor:'#F09595'}:{})}} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)} placeholder="e.g. 15% off any purchase over $25, excludes alcohol"/></Field>
+        {outcome==='completed'&&!hasOffer&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'-6px',marginBottom:'12px',fontWeight:'500'}}>Enter the exact discount they agreed to — this is required to complete the call.</div>}
         <NoteField note={note} setNote={setNote}/>
       </div>
     </div>
@@ -1449,7 +1455,8 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
             <>
               <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>Enter everything you have — it pre-fills the form so they just confirm it, not fill it out.</div>
               {detailsForm}
-              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:creatingAgr?0.7:1}} disabled={creatingAgr} onClick={startForm}><FileText size={14}/>{creatingAgr?'Preparing…':'Continue — choose text or email'}</button>
+              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:creatingAgr||!hasOffer?0.5:1}} disabled={creatingAgr||!hasOffer} onClick={startForm}><FileText size={14}/>{creatingAgr?'Preparing…':'Continue — choose text or email'}</button>
+              {!hasOffer&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'8px',fontWeight:'500'}}>Enter the discount details above before continuing.</div>}
               {agreementErr&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'10px'}}>{agreementErr}</div>}
             </>
           ):(
@@ -1466,8 +1473,9 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
               <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}><Video size={16} style={{flexShrink:0,marginTop:'1px'}}/><span>Record yourself confirming the discount with them — a recording is <b>required</b> to mark this Completed. Scroll down, record, then tap “Use this recording — complete call.” Video is best, but audio-only works too.</span></div>
               <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'12px'}}>Confirm their details</div>
               {detailsForm}
-              <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasRecording?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasRecording?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasRecording?'Recording attached — this goes to your admin to verify and pay.':'No recording yet — record one below (it completes the call automatically).'}</span></div>
-              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasRecording?1:0.5}} disabled={!hasRecording} onClick={save}><CheckCircle size={14}/>Save completed</button>
+              <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasRecording?'#0F6E56':'#A32D2D',margin:'0 0 6px',fontWeight:'500'}}>{hasRecording?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasRecording?'Recording attached — this goes to your admin to verify and pay.':'No recording yet — record one below (it completes the call automatically).'}</span></div>
+              <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasOffer?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasOffer?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasOffer?'Discount details entered.':'Enter the discount details above — required to complete.'}</span></div>
+              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasRecording&&hasOffer?1:0.5}} disabled={!hasRecording||!hasOffer} onClick={save}><CheckCircle size={14}/>Save completed</button>
             </>
           )}
         </div>
@@ -1554,7 +1562,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
         </div>
         <div>
           <CallRecorder call={call} callerName={callerName} submittedTake={submittedTake}
-            onTakeSaved={take=>onAddRecordingTake(call.id,take)} onUseTake={take=>setSubmittedTake(take.take)} onComplete={save}/>
+            onTakeSaved={take=>onAddRecordingTake(call.id,take)} onUseTake={take=>setSubmittedTake(take.take)} onComplete={save} canComplete={hasOffer} completeHint="Enter the discount details above before completing."/>
           <div style={{fontSize:'12px',color:'#64748b',marginTop:'10px',lineHeight:1.5}}>Put the call on <b>speakerphone</b> near your computer so the recording captures both voices. Every take is saved — you can re-record and pick the good one.</div>
         </div>
       </div>
