@@ -1,5 +1,5 @@
 import { PDFDocument, StandardFonts, rgb } from "npm:pdf-lib@1.17.1";
-import { corsHeaders, json, preflight, serviceClient } from "../_shared/context.ts";
+import { corsHeaders, json, preflight, requireRep, serviceClient } from "../_shared/context.ts";
 import { hashToken } from "../_shared/crypto.ts";
 import {
   SIGNATURE_STAMPS,
@@ -26,20 +26,36 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return preflight();
   if (req.method !== "GET") return json({ error: "Method not allowed" }, 405);
 
-  const token = new URL(req.url).searchParams.get("token");
-  if (!token) return json({ error: "Missing token" }, 400);
+  const params = new URL(req.url).searchParams;
+  const token = params.get("token");
+  const agreementId = params.get("agreementId");
 
   const db = serviceClient();
 
-  const { data: row } = await db
-    .from("agreement_tokens")
-    .select("agreement_id, agreements(id, status, rep_name, rep_signed_at)")
-    .eq("token_hash", await hashToken(token))
-    .maybeSingle();
+  // Two ways in: the merchant with their one-time token, OR a signed-in Payout Pro
+  // rep/admin pulling the filled copy by agreement id to review before approving.
+  let agreement: any;
+  if (agreementId) {
+    const rep = await requireRep(req);
+    if (!rep) return json({ error: "Unauthorized" }, 401);
+    const { data } = await db
+      .from("agreements")
+      .select("id, status, rep_name, rep_signed_at")
+      .eq("id", agreementId)
+      .maybeSingle();
+    agreement = data;
+  } else if (token) {
+    const { data: row } = await db
+      .from("agreement_tokens")
+      .select("agreement_id, agreements(id, status, rep_name, rep_signed_at)")
+      .eq("token_hash", await hashToken(token))
+      .maybeSingle();
+    agreement = row?.agreements;
+  } else {
+    return json({ error: "Missing token" }, 400);
+  }
 
-  if (!row) return json({ error: "Not found." }, 404);
-
-  const agreement = row.agreements as any;
+  if (!agreement) return json({ error: "Not found." }, 404);
   if (agreement.status !== "signed") return json({ error: "Not signed yet." }, 409);
 
   const { data: sig } = await db

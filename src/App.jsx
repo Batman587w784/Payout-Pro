@@ -1978,6 +1978,67 @@ function CallerPayouts({ emp, deals, assignments }) {
   );
 }
 
+// ── Admin: open the merchant's info stamped onto the real agreement PDF (authenticated by JWT) ──
+function AgreementPdfButton({ agreementId, label='View filled agreement (PDF)' }) {
+  const [loading,setLoading]=useState(false); const [err,setErr]=useState('');
+  const open=async()=>{
+    setLoading(true); setErr('');
+    try{
+      const {data:{session}}=await supabase.auth.getSession();
+      const res=await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/agreement-pdf?agreementId=${encodeURIComponent(agreementId)}`,{headers:{apikey:import.meta.env.VITE_SUPABASE_ANON_KEY,Authorization:`Bearer ${session?.access_token}`}});
+      if(!res.ok){ let e='HTTP '+res.status; try{ e=(await res.json()).error||e; }catch{/* keep */} throw new Error(e); }
+      const blob=await res.blob(); window.open(URL.createObjectURL(blob),'_blank');
+    }catch(e){ setErr('Could not open the filled agreement ('+(e.message||e)+'). If it keeps failing, redeploy the agreement-pdf function.'); }
+    finally{ setLoading(false); }
+  };
+  return (<>
+    <button style={{...BTN(false),marginTop:'10px'}} onClick={open} disabled={loading}><FileText size={13}/>{loading?'Opening…':label}</button>
+    {err&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'8px'}}>{err}</div>}
+  </>);
+}
+
+// ── Admin: review a signed e-agreement's filled-in form before approving it ──
+const AGR_FIELD_ORDER=[['business_name','Business name'],['contact_person','Contact person'],['phone','Phone'],['email','Email'],['address','Address'],['discount_offered','Discount offered']];
+function AgreementReview({ agreementId }) {
+  const [agr,setAgr]=useState(null); const [state,setState]=useState('loading'); const [msg,setMsg]=useState('');
+  useEffect(()=>{
+    let cancel=false;
+    (async()=>{
+      const {data,error}=await supabase.from('agreements')
+        .select('id,status,prefill,signatures(signer_name,signer_title,submitted_fields,signed_at)')
+        .eq('id',agreementId).maybeSingle();
+      if(cancel) return;
+      if(error){ setState('error'); setMsg(error.message); return; }
+      if(!data){ setState('missing'); return; }
+      setAgr(data); setState('ok');
+    })();
+    return ()=>{cancel=true;};
+  },[agreementId]);
+  const sig=Array.isArray(agr?.signatures)?agr.signatures[0]:agr?.signatures;
+  const fields=sig?.submitted_fields||agr?.prefill||{};
+  return (
+    <div style={{border:'0.5px solid #BBD9F3',background:'#F0F6FC',borderRadius:'var(--border-radius-md)',padding:'12px 14px',marginBottom:'10px'}}>
+      <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',fontWeight:'600',color:'#185FA5',marginBottom:'8px'}}><FileText size={13}/>Signed e-agreement — review their filled-in form</div>
+      {state==='loading'&&<div style={{fontSize:'12px',color:'#64748b'}}>Loading the signed form…</div>}
+      {state==='error'&&<div style={{fontSize:'12px',color:'#A32D2D'}}>Couldn’t load the agreement: {msg}</div>}
+      {state==='missing'&&<div style={{fontSize:'12px',color:'#854F0B'}}>Agreement record not found.</div>}
+      {state==='ok'&&(
+        <>
+          {agr.status!=='signed'&&<div style={{fontSize:'12px',color:'#854F0B',marginBottom:'8px',fontWeight:'500'}}>Not signed yet — still waiting on the merchant.</div>}
+          <div style={{fontSize:'12px',color:'#0f172a',lineHeight:1.75}}>
+            {AGR_FIELD_ORDER.map(([k,label])=>(
+              <div key={k}><span style={{color:'#64748b'}}>{label}: </span>{String(fields[k]||'').trim()||<span style={{color:'#A32D2D'}}>— blank —</span>}</div>
+            ))}
+            {sig?.signer_name&&<div style={{marginTop:'4px'}}><span style={{color:'#64748b'}}>Signed by: </span>{sig.signer_name}{sig.signer_title?`, ${sig.signer_title}`:''}{sig.signed_at?` · ${fmtDate((sig.signed_at||'').split('T')[0])}`:''}</div>}
+          </div>
+          {agr.status==='signed'&&<AgreementPdfButton agreementId={agreementId}/>}
+          <div style={{fontSize:'11px',color:'#64748b',marginTop:'8px',lineHeight:1.5}}>Check every field is right. If anything’s wrong, reach back out to the merchant, then Reject; otherwise Approve to lock it in and pay.</div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ── Admin: verify recordings + approve straight into payouts ──
 function VerifyRow({ call, callerName, onApprove, onReject }) {
   const recs = call.recordings?.length ? call.recordings
@@ -2017,8 +2078,9 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
           ))}
         </div>
       )}
+      {call.agreementId&&<AgreementReview agreementId={call.agreementId}/>}
       {!url&&submitted&&<button style={BTN(false)} onClick={()=>load(submitted)} disabled={loading}><Play size={13}/>{loading?'Loading…':'Play recording'}</button>}
-      {!submitted&&(call.agreementId?<div style={{fontSize:'12px',color:'#185FA5'}}>Completed via signed e-agreement (no recording).</div>:<div style={{fontSize:'12px',color:'#854F0B'}}>No recording attached to this call.</div>)}
+      {!submitted&&!call.agreementId&&<div style={{fontSize:'12px',color:'#854F0B'}}>No recording attached to this call.</div>}
       {err&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'8px'}}>{err}</div>}
       {url&&(isVideo
         ? <video src={url} controls style={{width:'100%',maxWidth:'420px',borderRadius:'var(--border-radius-md)',margin:'10px 0',display:'block'}}/>
@@ -2130,8 +2192,10 @@ function DiscountRow({ call, callerName, area, date, status }) {
                 ? <video src={url} controls style={{width:'100%',maxWidth:'420px',borderRadius:'var(--border-radius-md)',margin:'10px 0 0',display:'block'}}/>
                 : <audio src={url} controls style={{width:'100%',margin:'10px 0 0'}}/>)}
             </>
+          ):call.agreementId?(
+            <div style={{fontSize:'12px',color:'#185FA5'}}>Completed via signed e-agreement — pull up the physical form:<div><AgreementPdfButton agreementId={call.agreementId}/></div></div>
           ):(
-            <div style={{fontSize:'12px',color:call.agreementId?'#185FA5':'#854F0B'}}>{call.agreementId?'Completed via signed e-agreement (no video).':'No recording attached to this discount.'}</div>
+            <div style={{fontSize:'12px',color:'#854F0B'}}>No recording attached to this discount.</div>
           )}
         </div>
       )}
@@ -2151,7 +2215,8 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
   const [areaCaller,setAreaCaller]=useState('all');
   const [groupBy,setGroupBy]=useState('group');
   const [openState,setOpenState]=useState('');
-  const pending=calls.filter(c=>(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&(c.submittedTake!=null||c.recordingPath)&&(!c.verifyStatus||c.verifyStatus==='pending'));
+  // Awaiting verification = a completed call with proof (a recording OR a signed e-agreement) not yet approved.
+  const pending=calls.filter(c=>(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&(c.submittedTake!=null||c.recordingPath||c.agreementId)&&(!c.verifyStatus||c.verifyStatus==='pending'));
   const followUps=calls.filter(c=>c.status==='send_info');
   const nameOf=id=>employees.find(e=>e.id===id)?.name||'Unassigned';
 
@@ -2180,7 +2245,7 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
       <div style={{...CARD,marginBottom:'16px'}}>
         <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)',display:'flex',alignItems:'center',gap:'8px'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Awaiting verification</span>{pending.length>0&&<Badge color="amber">{pending.length}</Badge>}</div>
         {pending.length===0?(
-          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>No recordings waiting. Completed calls your team records show up here to review and pay.</div>
+          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Nothing waiting. Completed calls — recorded confirmations and signed e-agreements — show up here to review and pay.</div>
         ):pending.map(c=><VerifyRow key={c.id} call={c} callerName={nameOf(c.callerId)} onApprove={onApprove} onReject={onReject}/>)}
       </div>
 
