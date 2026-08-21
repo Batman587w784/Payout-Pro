@@ -48,8 +48,6 @@ const addDays = (date,n) => { const d=new Date(date); d.setDate(d.getDate()+n); 
 const daysUntil = d => d ? Math.round((new Date(d+'T00:00:00') - new Date(today()+'T00:00:00'))/86400000) : null;
 const GROUP_DEADLINE_DAYS = 7; // every imported group should be finished within a week
 const fmtDate = s => { if(!s) return ''; const [y,m,d]=s.split('-'); return `${SM[+m-1]} ${+d}, ${y}`; };
-const fmtTime = t => { if(!t) return ''; const [h,m]=t.split(':').map(Number); const ap=h<12?'AM':'PM'; return `${h%12||12}:${String(m).padStart(2,'0')} ${ap}`; };
-const fmtDateTime = (d,t) => d ? `${fmtDate(d)}${t?` at ${fmtTime(t)}`:''}` : '';
 const initials = name => name.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase();
 // US phone → E.164. 10 digits → +1XXXXXXXXXX; 11 starting with 1 → +1…; already-'+' kept;
 // anything else returned as-is so the caller/validator can flag it.
@@ -270,7 +268,7 @@ function ResetPasswordPage({ onDone, onCancel }) {
 }
 
 // ─── EMPLOYEE / CALLER PORTAL ─────────────────────────────────────
-function EmployeePortal({employees,deals,assignments,calls,orgs,userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess}) {
+function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess}) {
   const [screen,setScreen]=useState('home');
   const [logId,setLogId]=useState('');
   const emp = employees.find(e=>e.email?.toLowerCase()===userEmail?.toLowerCase());
@@ -290,7 +288,7 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,userEmail,onSign
   );
 
   const myCalls = calls.filter(c=>leadVisibleTo(c,emp.id));
-  const queueCount = myCalls.filter(c=>c.status==='to_call'||c.status==='callback'||c.status==='no_answer').length;
+  const queueCount = myCalls.filter(c=>{const s=effectiveStatus(c);return s==='to_call'||s==='callback'||s==='no_answer';}).length;
   const logCall = myCalls.find(c=>c.id===logId); // derived fresh so recordings update live
   const TABS=[['home','My Leads',Building2],['crm','CRM',Users],['agreements','Agreements',FileText],['payouts','Payouts',DollarSign]];
 
@@ -313,7 +311,7 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,userEmail,onSign
           ))}
         </div>
 
-        {screen==='home'&&<CallerHome myCalls={myCalls} onOpenLog={c=>setLogId(c.id)}/>}
+        {screen==='home'&&<CallerHome myCalls={myCalls} onOpenLog={c=>setLogId(c.id)} groupDefs={groups}/>}
         {screen==='crm'&&<CallerCRM myCalls={myCalls} onOpenLog={c=>setLogId(c.id)} onWorkQueue={()=>setScreen('home')}/>}
         {screen==='agreements'&&<CallerAgreements/>}
         {screen==='payouts'&&<CallerPayouts emp={emp} deals={deals} assignments={assignments}/>}
@@ -928,6 +926,14 @@ function PayrollView({employees,deals,assignments}) {
 }
 
 // ─── PAY STUB MODAL ───────────────────────────────────────────────
+// Print-to-PDF pay stub (Phase 5 — replaces the previously-undefined downloadStubPDF).
+function downloadStubPDF(emp,period,amt){
+  const esc=s=>String(s==null?'':s).replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
+  const rows=(period.entries||[]).filter(e=>e.tier!=='Redacted').map(e=>`<tr><td>${esc(e.business||'—')}</td><td>${esc(e.discountType||e.tier||'')}</td><td style="text-align:right">${e.amount!=null?'$'+(+e.amount).toFixed(2):''}</td></tr>`).join('');
+  const html=`<!doctype html><html><head><meta charset="utf-8"><title>Pay stub — ${esc(emp?.name||'')}</title><style>body{font-family:Arial,Helvetica,sans-serif;color:#0f172a;padding:32px;max-width:640px;margin:0 auto}h1{font-size:20px;margin:0 0 4px}.muted{color:#64748b;font-size:12px}table{width:100%;border-collapse:collapse;font-size:13px;margin:18px 0}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #e2e8f0}th{background:#f1f5f9;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#475569}.total{display:flex;justify-content:space-between;align-items:center;background:#E1F5EE;border:1px solid #5DCAA5;border-radius:8px;padding:14px 16px;margin-top:12px}.total b{color:#0F6E56}</style></head><body><h1>Tailgate Payday — Pay stub</h1><div class="muted">${esc(emp?.name||'—')} &middot; ${esc(fmtDate(period.startDate))} &rarr; ${esc(fmtDate(period.endDate))} &middot; ${period.discounts} discount${period.discounts===1?'':'s'}</div>${rows?`<table><thead><tr><th>Business</th><th>Discount</th><th style="text-align:right">Amount</th></tr></thead><tbody>${rows}</tbody></table>`:''}<div class="total"><b>Gross pay</b><b style="font-size:20px">$${(+amt||0).toFixed(2)}</b></div></body></html>`;
+  const w=window.open('','_blank'); if(!w){ alert('Please allow pop-ups to download the stub.'); return; }
+  w.document.write(html); w.document.close(); w.focus(); setTimeout(()=>{try{w.print();}catch{/* user can print manually */}},300);
+}
 function PayStubModal({emp,period,onClose}) {
   const amt=periodAmt(period);
 
@@ -973,6 +979,42 @@ const VERIFY = {
   approved: {label:'Verified',        color:'teal'},
   rejected: {label:'Needs redo',      color:'red'},
 };
+// ── "Not interested" cooldown — two independent ladders (Phase 1.1) ──
+// Gatekeeper/unsure "no" bounces back fast (a different caller retries); an owner-level
+// "no" escalates to long timeouts. Counters advance separately; gatekeeper declines never
+// push a lead up the owner ladder. Days are indexed by the NEW (1-based) count on that ladder.
+const DECLINE_LADDERS = { gatekeeper:[1,3,7], owner:[3,7,30,365] };
+const DECLINE_LEVELS = { owner:'Spoke to owner/GM', gatekeeper:'Gatekeeper / staff only', unsure:'Not sure' };
+const declineDaysFor = (level,count) => { const l=DECLINE_LADDERS[level==='owner'?'owner':'gatekeeper']; return l[Math.min(Math.max(count,1),l.length)-1]; };
+// A lead whose cooldown has elapsed re-enters the queue as if fresh — computed on read (no scheduler).
+const declineCooldownOver = c => c?.status==='not_interested' && !c.permanentlyDeclined && !!c.nextEligibleDate && c.nextEligibleDate<=today();
+// One-time backfill (runs on load, idempotent via a per-record version stamp): bring legacy call
+// records up to the cooldown schema. Missing counters default to 0; any record already marked
+// not_interested is treated as a single GATEKEEPER-level decline (the safer assumption — the
+// decision-maker was never actually asked) and given a nextEligibleDate of today so it resurfaces now.
+const CALLS_SCHEMA_VERSION = 1;
+const migrateCalls = list => {
+  let changed=false;
+  const out=list.map(c=>{
+    if((c._mig||0) >= CALLS_SCHEMA_VERSION) return c;
+    changed=true;
+    const patch={ _mig:CALLS_SCHEMA_VERSION, gatekeeperDeclineCount:c.gatekeeperDeclineCount||0, ownerDeclineCount:c.ownerDeclineCount||0 };
+    if(c.status==='not_interested' && !c.permanentlyDeclined && c.nextEligibleDate==null){
+      patch.gatekeeperDeclineCount=Math.max(1, c.gatekeeperDeclineCount||0);
+      patch.lastDeclineLevel=c.lastDeclineLevel||'gatekeeper';
+      patch.nextEligibleDate=today(); // resurface immediately
+      if(!(c.declineHistory&&c.declineHistory.length))
+        patch.declineHistory=[{date:(c.createdAt||'').split('T')[0]||today(), callerId:c.callerId||null, declineLevel:'gatekeeper', notes:'(backfilled from legacy record)'}];
+    }
+    return {...c,...patch};
+  });
+  return changed?out:list;
+};
+const declineTriedBy = c => new Set((c?.declineHistory||[]).map(h=>h.callerId).filter(Boolean));
+const effectiveStatus = c => declineCooldownOver(c) ? 'to_call' : c?.status;
+// Callback timing display (Phase 1.2): date + availability window (falls back to legacy HH:MM)
+const AVAIL_LABEL = { morning:'Morning', afternoon:'Afternoon', evening:'Evening', anytime:'Anytime' };
+const callbackWhen = c => `${fmtDate(c.callbackDate)}${c.availability?` · ${AVAIL_LABEL[c.availability]||c.availability}`:(c.callbackTime?` · ${c.callbackTime}`:'')}`;
 // Filesystem-safe slug for organizing recordings in the storage bucket
 const slug = s => (s||'').toString().toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40) || 'x';
 const REC_MAX_SEC = 15 * 60;        // auto-stop recordings at 15 minutes
@@ -1184,7 +1226,12 @@ const parseMoney = s => { const n=parseFloat((s==null?'':s).toString().replace(/
 // logs an outcome ("claims" it); after that only the claimer sees it.
 const leadPool = c => (c?.callerIds&&c.callerIds.length) ? c.callerIds : (c?.callerId ? [c.callerId] : []);
 const leadClaimed = c => !!c?.callerId && c.status!=='to_call';
-const leadVisibleTo = (c,id) => leadClaimed(c) ? c.callerId===id : leadPool(c).includes(id);
+const leadVisibleTo = (c,id) => {
+  // A cooled-down "not interested" lead reopens — preferring pool callers who haven't tried it yet
+  // (a fresh voice), falling back to the whole pool if everyone has already had a turn.
+  if(declineCooldownOver(c)){ const pool=leadPool(c); const tried=declineTriedBy(c); const untried=pool.filter(p=>!tried.has(p)); return (untried.length?untried:pool).includes(id); }
+  return leadClaimed(c) ? c.callerId===id : leadPool(c).includes(id);
+};
 const leadAssignedTo = (c,id) => (c.callerId===id) || (!leadClaimed(c)&&leadPool(c).includes(id)); // admin attribution
 const ValuePicker = ({value,onChange}) => (
   <div style={{display:'flex',flexWrap:'wrap',gap:'6px',maxHeight:'156px',overflowY:'auto',padding:'2px'}}>
@@ -1201,6 +1248,28 @@ const ValueSelect = ({value,onChange}) => (
 );
 // Small field helpers for the Log Call form (module-level so inputs keep focus across renders)
 const Wait = ({children}) => <div style={{display:'flex',alignItems:'center',gap:'7px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'7px 11px',fontSize:'12px',color:'#854F0B',margin:'0 0 12px',fontWeight:'500'}}><Pause size={13} style={{flexShrink:0}}/><span>{children||'Wait for them to say “yes.”'}</span></div>;
+// The verbal-confirmation script — shared by the Log Call verbal step and the Home reference modal (Phase 2.1)
+const RecordingScript = ({ callerName='[your name]', contactName='[contact name]', position='[position]', businessName='[business name]', addrText='[address, city, state]', offerText='[offer details]' }) => (
+  <div style={{fontSize:'13px',lineHeight:1.65,color:'#0f172a'}}>
+    <p style={{margin:'0 0 12px'}}>“Great, this all sounds good. If you don’t mind, I’m just going to run through everything again to make sure we get all the details correct. Before we go any further, I want to let you know this call is being recorded — is that okay with you?”</p>
+    <Wait>Wait ~2 seconds for a “yes.”</Wait>
+    <p style={{margin:'0 0 12px'}}>“This is <b>{callerName}</b> with Tailgate Fundraising, on <b>{fmtDate(today())}</b>. I am now recording this call with the permission of <b>{contactName}</b>, who is the <b>{position}</b> of <b>{businessName}</b>, correct?”</p>
+    <Wait/>
+    <p style={{margin:'0 0 12px'}}>“Do you also certify that you are authorized to approve this discount agreement, and that your official address is <b>{addrText}</b>?” <span style={{color:'#64748b'}}>(for multiple locations, list them all)</span></p>
+    <Wait/>
+    <p style={{margin:'0 0 12px'}}>“Appreciate it. I just want to confirm your offer of <b>{offerText}</b>. You agree that our company, along with our partners and affiliates, has the unrestricted right to market, package, and sell this offer to any organization, individual, or group we choose, correct?”</p>
+    <Wait/>
+    <p style={{margin:'0 0 12px'}}>“And do you understand that if for any reason you ever want to cancel or update a discount, you have the option to by contacting us via our website <b>JoinTailgate.com</b>?”</p>
+    <Wait/>
+    <p style={{margin:0}}>“Perfect — what we’ll send you is an email with access to our performance dashboard to track analytics and keep you up to date with your deals. Besides that, you’re all set. Thanks again!”</p>
+  </div>
+);
+const ScriptModal = ({ onClose }) => (
+  <ModalWrap title="Verification script" onClose={onClose} wide>
+    <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>Read this once a merchant is interested and you’re ready to record. The names fill in automatically on a real call.</div>
+    <RecordingScript/>
+  </ModalWrap>
+);
 const DMFields = ({dm,set}) => (
   <div style={{display:'grid',gridTemplateColumns:'90px 1fr 1fr',gap:'8px'}}>
     <Field label="Title"><input style={INP} placeholder="Owner" value={dm.title} onChange={e=>set('title',e.target.value)}/></Field>
@@ -1229,13 +1298,15 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
   const [businessType,setBusinessType]=useState(call.businessType||call.category||'');
   const [addresses,setAddresses]=useState(call.addresses?.length?call.addresses:[{street:call.location||'',city:'',state:''}]);
   const [offerDetails,setOfferDetails]=useState(call.offerDetails||'');
-  const [cbDate,setCbDate]=useState(call.callbackDate||addDays(today(),2));
-  const [cbTime,setCbTime]=useState(call.callbackTime||'');
+  const [cbDate,setCbDate]=useState(call.callbackDate||addDays(today(),1));
+  const [availability,setAvailability]=useState(call.availability||'anytime');
+  const [declineLevel,setDeclineLevel]=useState(null); // 'owner' | 'gatekeeper' | 'unsure' — required before saving not_interested
   const [note,setNote]=useState('');
   const initFirst=(call.decisionMaker?.firstName)||(call.spokeTo||call.contact||'').trim().split(/\s+/)[0]||'there';
   const initBiz=call.business||'your business';
   const [emailSubject,setEmailSubject]=useState(`${initFirst!=='there'?initFirst+' - ':''}${initBiz} info from Tailgate Fundraising`);
-  const [emailBody,setEmailBody]=useState(`Hi ${initFirst},\n\nGreat speaking with you today. As promised, here's a bit more about partnering with Tailgate Fundraising for ${initBiz}.\n\nHere's the short version of what this looks like for you:\n\nThere is no cost to you. No fee, no commitment, nothing to buy. You offer a discount to cardholders, and your team honors it in person when someone shows the card. That's the whole ask.\n\nWhat you get is exposure to everyone supporting the cause. Every family, student, and supporter who buys a card sees your business on it, and they carry it with them. Most local advertising asks you to pay and hope. This puts you in front of people who are already choosing where to spend locally, and it ties your name to something the community cares about.\n\nIt also drives foot traffic rather than impressions. A card in someone's wallet is a reason to walk in your door instead of driving past.\n\nLater this month we're launching a reporting dashboard, so you'll be able to see how your offer is actually performing, similar to what you'd expect from Google Analytics. Redemptions, traffic, and how you compare to other partners on the card. You'll get access as soon as it goes live.\n\nWhenever you're ready, just use the sign-up link below to get on the card. Any questions, reply right here.`);
+  // Longer-form overview for "Needs more info" (Phase 3.1) — no specific discount presupposed.
+  const [emailBody,setEmailBody]=useState(`Hi ${initFirst},\n\nGreat talking with you today — here's a fuller picture of how Tailgate Fundraising works for ${initBiz}. No discount decision needed yet.\n\nWhat it is: a community discount card that local schools, teams, and nonprofits sell to raise money. Your business goes on the card with an offer you choose, and cardholders redeem it in person.\n\nHow it works, in three steps:\n1. You submit an offer whenever you're ready — anything from a percentage off to a free item. We'll help you pick something that drives traffic without hurting your margins.\n2. We promote it. Every family, student, and supporter who buys a card sees your business on it and carries it with them all year.\n3. You gain customers. A card in someone's wallet is a reason to walk in your door instead of driving past — and it ties your name to a cause the community cares about.\n\nWhat it costs you: nothing. No fee, no commitment, nothing to buy. You simply honor your offer when someone shows the card.\n\nYou'll also get access to a real-time dashboard — redemptions, foot traffic, and how you compare to other partners — so you can see exactly how it's performing.\n\nWhenever you're ready, use the link below to get started. You can fill in your discount right there, and reply here with any questions.`);
   const [emailed,setEmailed]=useState(false);
   const [sending,setSending]=useState(false);
   const [emailErr,setEmailErr]=useState('');
@@ -1245,6 +1316,8 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
   const [agreementId,setAgreementId]=useState(null);
   const [creatingAgr,setCreatingAgr]=useState(false);
   const [agreementErr,setAgreementErr]=useState('');
+  const [niAgreement,setNiAgreement]=useState(false); // Phase 3.1: send the agreement with the discount left blank
+  const [niAgreementId,setNiAgreementId]=useState(null); // kept separate from the completed-form agreement so snapshots never cross
 
   const setDmF=(k,v)=>setDm(d=>({...d,[k]:v}));
   const setAddr=(i,k,v)=>setAddresses(a=>a.map((x,j)=>j===i?{...x,[k]:v}:x));
@@ -1324,6 +1397,15 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     catch(e){ setAgreementErr('Could not start the agreement ('+(e.message||e)+'). Deploy the agreements table, or use Verbal.'); }
     finally{ setCreatingAgr(false); }
   };
+  // Phase 3.1: create/send the agreement for a "needs more info" lead with the discount left blank.
+  // Uses its OWN id (niAgreementId) so it can never reuse the completed-form agreement's discount snapshot.
+  const startNeedsInfoAgreement=async()=>{
+    if(niAgreementId){ setNiAgreement(true); return; }
+    setCreatingAgr(true); setAgreementErr('');
+    try{ const id=await createAgreement(); setNiAgreementId(id); setNiAgreement(true); }
+    catch(e){ setAgreementErr('Could not start the agreement ('+(e.message||e)+').'); }
+    finally{ setCreatingAgr(false); }
+  };
   const saveFormCompleted=()=>{
     if(!hasOffer) return; // discount details are required
     const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
@@ -1341,11 +1423,21 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     } else if(outcome==='needs_info'){
       commit({ status:'needs_info', ...(submittedTake!=null?{submittedTake}:{}), ...details, ...(emailed?{infoEmailedAt:new Date().toISOString()}:{}) });
     } else if(outcome==='callback'){
-      commit({ status:'callback', callbackDate:cbDate, callbackTime:cbTime, spokeTo, email, phone, decisionMaker:dm });
+      commit({ status:'callback', callbackDate:cbDate, availability, callbackTime:'', spokeTo, email, phone, decisionMaker:dm });
     } else if(outcome==='no_answer'){
       commit({ status:'no_answer', ...(spokeTo?{spokeTo}:{}) });
     } else if(outcome==='not_interested'){
-      commit({ status:'not_interested', spokeTo, email, phone, decisionMaker:dm });
+      if(!declineLevel) return; // must record who said no first
+      const isOwner=declineLevel==='owner';
+      const gk=(call.gatekeeperDeclineCount||0)+(isOwner?0:1);
+      const ow=(call.ownerDeclineCount||0)+(isOwner?1:0);
+      const days=declineDaysFor(declineLevel, isOwner?ow:gk);
+      const permanent=isOwner&&ow>=DECLINE_LADDERS.owner.length;
+      const entry={date:today(), callerId:myCallerId||null, declineLevel, notes:note.trim()};
+      commit({ status:'not_interested', spokeTo, email, phone, decisionMaker:dm,
+        gatekeeperDeclineCount:gk, ownerDeclineCount:ow, lastDeclineLevel:declineLevel,
+        nextEligibleDate:addDays(today(),days), permanentlyDeclined:permanent,
+        declineHistory:[...(call.declineHistory||[]), entry] });
     }
   };
   const detailsForm=(
@@ -1508,15 +1600,37 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
               <div style={{fontSize:'13px',color:'#854F0B',marginBottom:'12px'}}>Add their email in the details above to send them the info.</div>
             )}
           </div>
-          {emailTo&&!emailed&&<div style={{fontSize:'12px',color:'#854F0B',marginBottom:'8px',fontWeight:'500'}}>Send the info email above before you save.</div>}
-          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save — needs more info</button>
+          <div style={{borderTop:'0.5px solid var(--color-border-tertiary)',marginTop:'8px',paddingTop:'14px'}}>
+            <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'4px'}}>Or send the agreement now — they fill in their own discount</div>
+            <div style={{fontSize:'12px',color:'#64748b',marginBottom:'10px'}}>Same signing flow as a completed call, but the discount is left blank for the merchant to enter when they’re ready.</div>
+            {!niAgreement?(
+              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:creatingAgr?0.6:1}} disabled={creatingAgr} onClick={startNeedsInfoAgreement}><FileText size={14}/>{creatingAgr?'Preparing…':'Send agreement (discount blank)'}</button>
+            ):(
+              <AgreementPanel initialStep="channel" agreementId={niAgreementId} businessName={businessName||call.business} defaultPhone={phone||call.phone||''} defaultEmail={emailTo||''} onBack={()=>setNiAgreement(false)} onVerbal={()=>setNiAgreement(false)}/>
+            )}
+            {agreementErr&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'8px'}}>{agreementErr}</div>}
+          </div>
+          {emailTo&&!emailed&&<div style={{fontSize:'12px',color:'#854F0B',margin:'12px 0 8px',fontWeight:'500'}}>Send the info email (or the agreement) above before you save.</div>}
+          <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'12px'}} onClick={save}>Save — needs more info</button>
         </div>
       )}
       {outcome==='callback'&&(
         <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
-          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:'8px'}}>
-            <Field label="Call back on"><input style={INP} type="date" value={cbDate} onChange={e=>setCbDate(e.target.value)}/></Field>
-            <Field label="At (time)"><input style={INP} type="time" value={cbTime} onChange={e=>setCbTime(e.target.value)}/></Field>
+          <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'6px',fontWeight:'500'}}>When are they available?</label>
+          <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'14px'}}>
+            {[['morning','Morning'],['afternoon','Afternoon'],['evening','Evening'],['anytime','Anytime']].map(([v,l])=>(
+              <button key={v} onClick={()=>setAvailability(v)} style={{...BTN(availability===v),flex:'1 1 90px',justifyContent:'center'}}>{l}</button>
+            ))}
+          </div>
+          <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'6px',fontWeight:'500'}}>When should we call them back?</label>
+          <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'8px'}}>
+            {[['Tomorrow',1],['In 3 days',3],['Next week',7]].map(([l,d])=>{
+              const dv=addDays(today(),d);
+              return <button key={l} onClick={()=>setCbDate(dv)} style={{...BTN(cbDate===dv),flex:'1 1 90px',justifyContent:'center'}}>{l}</button>;
+            })}
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
+            <Field label="Or pick a date"><input style={INP} type="date" value={cbDate} onChange={e=>setCbDate(e.target.value)}/></Field>
             <Field label="Who did you speak to?"><input style={INP} value={spokeTo} onChange={e=>setSpokeTo(e.target.value)}/></Field>
           </div>
           <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
@@ -1531,34 +1645,35 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
           <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save</button>
         </div>
       )}
-      {outcome==='not_interested'&&(
+      {outcome==='not_interested'&&(()=>{
+        const isOwner=declineLevel==='owner';
+        const nextCount=isOwner?(call.ownerDeclineCount||0)+1:(call.gatekeeperDeclineCount||0)+1;
+        const days=declineLevel?declineDaysFor(declineLevel,nextCount):null;
+        const willPerm=isOwner&&nextCount>=DECLINE_LADDERS.owner.length;
+        return (
         <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
           <div style={{fontSize:'13px',color:'#64748b',marginBottom:'12px'}}>Not interested — still keep whatever contact info you got.</div>
+          <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'6px',fontWeight:'600'}}>Did you speak to the owner / manager? <span style={{color:'#A32D2D'}}>*required</span></label>
+          <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'6px'}}>
+            {[['owner','Yes — owner / GM'],['gatekeeper','No — gatekeeper / staff'],['unsure','Not sure']].map(([v,l])=>(
+              <button key={v} onClick={()=>setDeclineLevel(v)} style={{...BTN(declineLevel===v),flex:'1 1 120px',justifyContent:'center'}}>{l}</button>
+            ))}
+          </div>
+          {declineLevel&&<div style={{fontSize:'12px',color:willPerm?'#A32D2D':'#64748b',marginBottom:'12px',fontWeight:willPerm?'600':'400'}}>{willPerm?'This is a repeated owner-level “no” — it will be set aside for a year.':`We’ll hold this lead for ${days} day${days===1?'':'s'}, then it comes back around${isOwner?'':' for a fresh caller to retry'}.`}</div>}
           <Field label="Who did you speak to? (owner/contact)"><input style={INP} value={spokeTo} onChange={e=>setSpokeTo(e.target.value)}/></Field>
           <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
           <NoteField note={note} setNote={setNote}/>
-          <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save</button>
+          <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:declineLevel?1:0.5}} disabled={!declineLevel} onClick={save}>Save</button>
         </div>
-      )}
+        );
+      })()}
 
       {/* Recording — only shown once the rep picks the Verbal agreement path */}
       {outcome==='completed'&&completeMode==='verbal'&&(
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'14px',marginTop:'4px'}}>
         <div style={{...CARD,padding:'16px'}}>
           <div style={{fontSize:'11px',fontWeight:'600',textTransform:'uppercase',letterSpacing:'0.6px',color:'#64748b',marginBottom:'10px'}}>Recording script — read once they’re interested</div>
-          <div style={{fontSize:'13px',lineHeight:1.65,color:'#0f172a'}}>
-            <p style={{margin:'0 0 12px'}}>“Great, this all sounds good. If you don’t mind, I’m just going to run through everything again to make sure we get all the details correct. Before we go any further, I want to let you know this call is being recorded — is that okay with you?”</p>
-            <Wait>Wait ~2 seconds for a “yes.”</Wait>
-            <p style={{margin:'0 0 12px'}}>“This is <b>{callerName}</b> with Tailgate Fundraising, on <b>{fmtDate(today())}</b>. I am now recording this call with the permission of <b>{contactName}</b>, who is the <b>{position}</b> of <b>{businessName||'[business name]'}</b>, correct?”</p>
-            <Wait/>
-            <p style={{margin:'0 0 12px'}}>“Do you also certify that you are authorized to approve this discount agreement, and that your official address is <b>{addrText}</b>?” <span style={{color:'#64748b'}}>(for multiple locations, list them all)</span></p>
-            <Wait/>
-            <p style={{margin:'0 0 12px'}}>“Appreciate it. I just want to confirm your offer of <b>{offerText}</b>. You agree that our company, along with our partners and affiliates, has the unrestricted right to market, package, and sell this offer to any organization, individual, or group we choose, correct?”</p>
-            <Wait/>
-            <p style={{margin:'0 0 12px'}}>“And do you understand that if for any reason you ever want to cancel or update a discount, you have the option to by contacting us via our website <b>JoinTailgate.com</b>?”</p>
-            <Wait/>
-            <p style={{margin:0}}>“Perfect — what we’ll send you is an email with access to our performance dashboard to track analytics and keep you up to date with your deals. Besides that, you’re all set. Thanks again!”</p>
-          </div>
+          <RecordingScript callerName={callerName} contactName={contactName} position={position} businessName={businessName||'[business name]'} addrText={addrText} offerText={offerText}/>
         </div>
         <div>
           <CallRecorder call={call} callerName={callerName} submittedTake={submittedTake}
@@ -1575,10 +1690,10 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
 const LEAD_BATCH = 10;
 // Shared lead row used by both My Leads sections
 function LeadRow({ c, onOpenLog }) {
-  const st=CALL_STATUS[c.status]||CALL_STATUS.to_call;
+  const st=CALL_STATUS[effectiveStatus(c)]||CALL_STATUS.to_call; // a cooled-down decline reads as "To call", matching where it now sits
   const overdue=c.status==='callback'&&c.callbackDate&&c.callbackDate<today();
   return (
-    <div style={{display:'grid',gridTemplateColumns:'34px 1fr auto auto',gap:'12px',alignItems:'center',padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+    <div onClick={()=>onOpenLog(c)} role="button" tabIndex={0} style={{display:'grid',gridTemplateColumns:'34px 1fr auto auto',gap:'12px',alignItems:'center',padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)',cursor:'pointer'}}>
       <div style={{width:'34px',height:'34px',borderRadius:'50%',background:'var(--color-background-info)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',fontWeight:'600',color:'var(--color-text-info)'}}>{initials(c.contact||c.business||'?')}</div>
       <div style={{minWidth:0}}>
         <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap'}}><span style={{fontWeight:'500',fontSize:'14px'}}>{c.business}</span>{c.group&&<span style={{fontSize:'11px',color:'#185FA5',background:'var(--color-background-info)',borderRadius:'100px',padding:'1px 8px',fontWeight:'500'}}>{c.group}</span>}</div>
@@ -1587,68 +1702,55 @@ function LeadRow({ c, onOpenLog }) {
       <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap',justifyContent:'flex-end'}}>
         {!leadClaimed(c)&&leadPool(c).length>1&&<Badge color="gray">{leadPool(c).length} can see</Badge>}
         {leadValue(c)>0&&<span style={{background:'#E1F5EE',border:'1px solid #5DCAA5',borderRadius:'100px',padding:'2px 10px',fontSize:'12px',fontWeight:'700',color:'#0F6E56',whiteSpace:'nowrap'}}>${leadValue(c)}</span>}
-        {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:overdue?'#A32D2D':'#185FA5',fontWeight:'500'}}>{overdue?'Due ':''}{fmtDateTime(c.callbackDate,c.callbackTime)}</span>}
+        {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:overdue?'#A32D2D':'#185FA5',fontWeight:'500'}}>{overdue?'Due ':''}{callbackWhen(c)}</span>}
         {(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
         <Badge color={st.color}>{st.label}</Badge>
       </div>
-      <button style={{...BTN(true),padding:'6px 12px',fontSize:'12px',whiteSpace:'nowrap'}} onClick={()=>onOpenLog(c)}><Phone size={12}/>Log Call</button>
+      <button style={{...BTN(true),padding:'6px 12px',fontSize:'12px',whiteSpace:'nowrap'}} onClick={e=>{e.stopPropagation();onOpenLog(c);}}><Phone size={12}/>Log Call</button>
     </div>
   );
 }
 
-// Per-group progress toward the 7-day finish goal (min lead date + 7 days)
-const computeGroupStats = list => {
-  const map={};
-  list.forEach(c=>{ const g=c.group||'Other'; (map[g]=map[g]||[]).push(c); });
-  return Object.entries(map).map(([group,items])=>{
-    const total=items.length;
-    const called=items.filter(leadContacted).length;
-    const start=items.map(c=>(c.createdAt||'').split('T')[0]).filter(Boolean).sort()[0]||today();
-    const due=items.find(c=>c.groupDue)?.groupDue||addDays(start,GROUP_DEADLINE_DAYS); // admin override wins
-    return {group,total,called,pct:total?Math.round(called/total*100):0,due,left:daysUntil(due)};
-  }).sort((a,b)=>(a.pct-b.pct)||((a.left??0)-(b.left??0)));
-};
-function GroupProgressCard({ calls }) {
-  const stats=computeGroupStats(calls);
-  const rows=stats.some(s=>s.group!=='Other')?stats.filter(s=>s.group!=='Other'):stats;
-  if(rows.length===0) return null;
+// Group section on the caller Home (Phase 2.2/2.3): logo + name + accumulation, leads nested beneath.
+function GroupSection({ name, logoUrl, statsLeads, leads, onOpenLog }) {
+  const [shown,setShown]=useState(8);
+  const stats=groupSecuredStats(statsLeads);
+  const vis=leads.slice(0,shown); const rem=leads.length-vis.length;
   return (
     <div style={{...CARD,marginBottom:'14px'}}>
-      <div style={{padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'600',fontSize:'14px'}}>Group goals</span><span style={{fontSize:'12px',color:'#64748b',marginLeft:'8px'}}>finish each within {GROUP_DEADLINE_DAYS} days</span></div>
-      {rows.map(s=>{
-        const done=s.pct>=100, overdue=!done&&s.left<0, soon=!done&&s.left>=0&&s.left<=2;
-        const barCol=done?'#1D9E75':overdue?'#A32D2D':soon?'#EF9F27':'#1D9E75';
-        const dueLabel=done?'Done 🎉':overdue?`${-s.left}d overdue`:s.left===0?'Due today':`${s.left}d left`;
-        const dueCol=done?'#0F6E56':overdue?'#A32D2D':soon?'#854F0B':'#185FA5';
-        return (
-          <div key={s.group} style={{padding:'12px 18px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
-            <div style={{display:'flex',alignItems:'center',gap:'10px',marginBottom:'7px'}}>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontWeight:'500',fontSize:'14px'}}>{s.group}</div>
-                <div style={{fontSize:'12px',color:'#64748b'}}>{s.called} of {s.total} called · {s.total-s.called} left</div>
-              </div>
-              <span style={{fontSize:'12px',fontWeight:'700',color:dueCol,whiteSpace:'nowrap'}}>{dueLabel}</span>
-              <span style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:done?'#0F6E56':'#0f172a',minWidth:'38px',textAlign:'right'}}>{s.pct}%</span>
-            </div>
-            <div style={{height:'8px',background:'var(--color-border-tertiary)',borderRadius:'4px',overflow:'hidden'}}><div style={{width:`${Math.min(100,s.pct)}%`,height:'100%',background:barCol,borderRadius:'4px',transition:'width 0.3s'}}/></div>
-          </div>
-        );
-      })}
+      <div style={{display:'flex',alignItems:'center',gap:'12px',padding:'12px 16px',borderBottom:'0.5px solid var(--color-border-tertiary)',background:'var(--color-background-secondary)'}}>
+        {logoUrl
+          ? <img src={logoUrl} alt="" style={{width:'40px',height:'40px',borderRadius:'8px',objectFit:'cover',flexShrink:0,background:'#fff',border:'0.5px solid var(--color-border-tertiary)'}}/>
+          : <div style={{width:'40px',height:'40px',borderRadius:'8px',background:'#101f6b',color:'#fff',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700',fontSize:'14px',flexShrink:0}}>{initials(name)}</div>}
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:'700',fontSize:'15px',color:'#0f172a',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{name}</div>
+          <div style={{fontSize:'12px',color:'#64748b'}}>{statsLeads.length} lead{statsLeads.length===1?'':'s'} assigned{stats.thisWeek>0?` · +${stats.thisWeek} secured this week`:''}</div>
+        </div>
+        <div style={{textAlign:'right',flexShrink:0}}>
+          <div style={{fontFamily:'var(--font-mono)',fontWeight:'700',fontSize:'16px',color:'#0F6E56'}}>{stats.secured} secured</div>
+          <div style={{fontSize:'12px',color:'#64748b'}}>{fmt$(stats.cardValue)} in card value</div>
+        </div>
+      </div>
+      {vis.map(c=><LeadRow key={c.id} c={c} onOpenLog={onOpenLog}/>)}
+      {rem>0&&<div style={{padding:'12px 16px',textAlign:'center'}}><button style={BTN(false)} onClick={()=>setShown(s=>s+8)}>{rem} more in {name} — Show {Math.min(8,rem)}</button></div>}
     </div>
   );
 }
 
-function CallerHome({ myCalls, onOpenLog }) {
+
+function CallerHome({ myCalls, onOpenLog, groupDefs=[] }) {
   const t=today();
+  const [showScript,setShowScript]=useState(false);
   const [area,setArea]=useState('all');
   const [groupF,setGroupF]=useState('all');
   const [sort,setSort]=useState('priority');
   const [search,setSearch]=useState('');
   const [shownU,setShownU]=useState(LEAD_BATCH);
-  const [shownR,setShownR]=useState(LEAD_BATCH);
   const order={callback:0,completed:1,interested:1,recorded:1,needs_info:2,no_answer:3,not_interested:4};
-  // "Up next" = never contacted, or a callback whose date has arrived / passed
-  const isUrgent=c=>c.status==='to_call'||(c.status==='callback'&&(c.callbackDate||'')<=t);
+  // "Up next" = never contacted, a callback that's due, OR a not-interested lead whose cooldown elapsed
+  const isUrgent=c=>effectiveStatus(c)==='to_call'||(c.status==='callback'&&(c.callbackDate||'')<=t);
+  const dueCallbacks=myCalls.filter(c=>c.status==='callback'&&(c.callbackDate||'')<=t)
+    .sort((a,b)=>(a.callbackDate||'').localeCompare(b.callbackDate||''));
   const states=[...new Set(myCalls.map(leadState))].sort();
   const groups=[...new Set(myCalls.map(c=>c.group).filter(Boolean))].sort();
   const q=search.trim().toLowerCase();
@@ -1662,16 +1764,40 @@ function CallerHome({ myCalls, onOpenLog }) {
   const urgent=sortList(myCalls.filter(c=>keep(c)&&isUrgent(c)),true);
   const rest=sortList(myCalls.filter(c=>keep(c)&&!isUrgent(c)),false);
   const counts={
-    to_call: myCalls.filter(c=>c.status==='to_call').length,
+    to_call: myCalls.filter(c=>effectiveStatus(c)==='to_call').length,
     callback: myCalls.filter(c=>c.status==='callback').length,
     needs_info: myCalls.filter(c=>c.status==='needs_info').length,
     completed: myCalls.filter(c=>c.status==='completed'||c.status==='interested'||c.status==='recorded').length,
   };
   const uVis=urgent.slice(0,shownU), uRem=urgent.length-uVis.length;
-  const rVis=rest.slice(0,shownR), rRem=rest.length-rVis.length;
+  // Non-urgent leads grouped by their organization (Phase 2.3), stats from the caller's full set per group
+  const groupKeyOf=c=>c.group||'Other';
+  const allGroups={}; myCalls.filter(keep).forEach(c=>{ const k=groupKeyOf(c); (allGroups[k]=allGroups[k]||[]).push(c); });
+  const restByGroup={}; rest.forEach(c=>{ const k=groupKeyOf(c); (restByGroup[k]=restByGroup[k]||[]).push(c); });
+  const restGroups=Object.entries(restByGroup).sort((a,b)=>{
+    if(a[0]==='Other') return 1; if(b[0]==='Other') return -1;
+    return (groupSecuredStats(allGroups[b[0]]||b[1]).secured-groupSecuredStats(allGroups[a[0]]||a[1]).secured)||a[0].localeCompare(b[0]);
+  });
   const selStyle={...INP,width:'auto',padding:'6px 9px',fontSize:'12px'};
   return (
     <div>
+      {dueCallbacks.length>0&&(
+        <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
+          {dueCallbacks.map(c=>{
+            const lastNote=(c.notes||'').split('\n').filter(Boolean).pop();
+            return (
+              <button key={c.id} onClick={()=>onOpenLog(c)} style={{display:'flex',alignItems:'center',gap:'11px',width:'100%',textAlign:'left',cursor:'pointer',background:'#FAEEDA',border:'1px solid #EF9F27',borderRadius:'var(--border-radius-lg)',padding:'13px 16px',fontFamily:'var(--font-sans)'}}>
+                <Phone size={18} style={{flexShrink:0,color:'#854F0B'}}/>
+                <div style={{minWidth:0,flex:1}}>
+                  <div style={{fontSize:'14px',fontWeight:'700',color:'#854F0B'}}>Follow up with {c.business||'this lead'} today</div>
+                  <div style={{fontSize:'12px',color:'#92722f',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{[(c.callbackDate||'')<t?'Was due '+fmtDate(c.callbackDate):'Due today', c.availability?AVAIL_LABEL[c.availability]:null, lastNote].filter(Boolean).join(' · ')}</div>
+                </div>
+                <ChevronRight size={16} style={{flexShrink:0,color:'#854F0B'}}/>
+              </button>
+            );
+          })}
+        </div>
+      )}
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',marginBottom:'14px'}}>
         <Metric label="To call" value={counts.to_call}/>
         <Metric label="Callbacks" value={counts.callback} color="#185FA5"/>
@@ -1679,12 +1805,12 @@ function CallerHome({ myCalls, onOpenLog }) {
         <Metric label="Completed" value={counts.completed} color="#0F6E56"/>
       </div>
       <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap',marginBottom:'14px'}}>
-        <input style={{...selStyle,flex:'1 1 180px',minWidth:'150px'}} placeholder="Search leads — name, contact, city…" value={search} onChange={e=>{setSearch(e.target.value);setShownU(LEAD_BATCH);setShownR(LEAD_BATCH);}}/>
-        {groups.length>0&&<select style={selStyle} value={groupF} onChange={e=>{setGroupF(e.target.value);setShownU(LEAD_BATCH);setShownR(LEAD_BATCH);}}>
+        <input style={{...selStyle,flex:'1 1 180px',minWidth:'150px'}} placeholder="Search leads — name, contact, city…" value={search} onChange={e=>{setSearch(e.target.value);setShownU(LEAD_BATCH);}}/>
+        {groups.length>0&&<select style={selStyle} value={groupF} onChange={e=>{setGroupF(e.target.value);setShownU(LEAD_BATCH);}}>
           <option value="all">All groups</option>
           {groups.map(g=><option key={g} value={g}>{g}</option>)}
         </select>}
-        <select style={selStyle} value={area} onChange={e=>{setArea(e.target.value);setShownU(LEAD_BATCH);setShownR(LEAD_BATCH);}}>
+        <select style={selStyle} value={area} onChange={e=>{setArea(e.target.value);setShownU(LEAD_BATCH);}}>
           <option value="all">All areas</option>
           {states.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
@@ -1693,9 +1819,10 @@ function CallerHome({ myCalls, onOpenLog }) {
           <option value="pay">Sort: Highest pay</option>
           <option value="area">Sort: Location</option>
         </select>
+        <button style={{...selStyle,display:'inline-flex',alignItems:'center',gap:'5px',cursor:'pointer',fontWeight:'500',color:'#185FA5'}} onClick={()=>setShowScript(true)}><FileText size={13}/>Script</button>
       </div>
 
-      <GroupProgressCard calls={myCalls}/>
+      {showScript&&<ScriptModal onClose={()=>setShowScript(false)}/>}
 
       <div style={{...CARD,marginBottom:'14px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
@@ -1712,22 +1839,14 @@ function CallerHome({ myCalls, onOpenLog }) {
         )}
       </div>
 
-      <div style={CARD}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-          <span style={{fontWeight:'500',fontSize:'14px'}}>Everything else</span>
-          <span style={{fontSize:'12px',color:'#64748b'}}>{myCalls.length} total</span>
-        </div>
-        {myCalls.length===0?(
-          <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Nothing assigned yet. When your admin imports or assigns merchants for you to call, they’ll show up here.</div>
-        ):rest.length===0?(
-          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Everyone you’ve already logged will collect here.</div>
-        ):rVis.map(c=><LeadRow key={c.id} c={c} onOpenLog={onOpenLog}/>)}
-        {rRem>0&&(
-          <div style={{padding:'14px 18px',textAlign:'center'}}>
-            <button style={BTN(false)} onClick={()=>setShownR(s=>s+LEAD_BATCH)}>{rRem} more — Show {Math.min(LEAD_BATCH,rRem)}</button>
-          </div>
-        )}
-      </div>
+      <div style={{fontWeight:'500',fontSize:'14px',margin:'0 0 10px',color:'#0f172a'}}>By group</div>
+      {myCalls.length===0?(
+        <div style={{...CARD,padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Nothing assigned yet. When your admin imports or assigns merchants for you to call, they’ll show up here.</div>
+      ):restGroups.length===0?(
+        <div style={{...CARD,padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>Everyone you’ve already logged is up top. Nothing else to browse right now.</div>
+      ):restGroups.map(([name,list])=>(
+        <GroupSection key={name} name={name} logoUrl={groupLogo(groupDefs,name)} statsLeads={allGroups[name]||list} leads={list} onOpenLog={onOpenLog}/>
+      ))}
     </div>
   );
 }
@@ -1771,7 +1890,7 @@ function CallerCRM({ myCalls, onOpenLog, onWorkQueue }) {
                   <button key={x.id} onClick={()=>onOpenLog(x)} style={{textAlign:'left',background:'var(--color-background-primary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 11px',cursor:'pointer',fontFamily:'var(--font-sans)'}}>
                     <div style={{display:'flex',justifyContent:'space-between',alignItems:'baseline',gap:'6px'}}><div style={{fontWeight:'500',fontSize:'13px',color:'#0f172a'}}>{x.business}</div>{leadValue(x)>0&&<span style={{fontSize:'12px',fontWeight:'700',color:'#0F6E56',whiteSpace:'nowrap'}}>${leadValue(x)}</span>}</div>
                     <div style={{fontSize:'11px',color:'#64748b',marginTop:'2px'}}>{[leadCity(x),x.phone].filter(Boolean).join(' · ')||'—'}</div>
-                    {x.status==='callback'&&x.callbackDate&&<div style={{fontSize:'11px',color:x.callbackDate<today()?'#A32D2D':'#185FA5',fontWeight:'500',marginTop:'3px'}}>Call back {fmtDateTime(x.callbackDate,x.callbackTime)}</div>}
+                    {x.status==='callback'&&x.callbackDate&&<div style={{fontSize:'11px',color:x.callbackDate<today()?'#A32D2D':'#185FA5',fontWeight:'500',marginTop:'3px'}}>Call back {callbackWhen(x)}</div>}
                     {(x.status==='completed'||x.status==='interested'||x.status==='recorded')&&x.verifyStatus&&<div style={{marginTop:'4px'}}><Badge color={VERIFY[x.verifyStatus].color}>{VERIFY[x.verifyStatus].label}</Badge></div>}
                   </button>
                 ))}
@@ -2101,6 +2220,96 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
   );
 }
 
+// ── Super-admin: persistent Groups with logos (Phase 3.2) ──
+function AdminGroupsView({ groups, calls, onAdd, onEdit, onDelete }) {
+  // Every group the app knows about: explicit definitions + any name that only exists on leads.
+  const byName={};
+  groups.forEach(g=>{ byName[(g.name||'').trim().toLowerCase()]={def:g,name:g.name,leads:[]}; });
+  calls.forEach(c=>{ const nm=(c.group||'').trim(); if(!nm) return; const k=nm.toLowerCase(); (byName[k]=byName[k]||{def:null,name:nm,leads:[]}).leads.push(c); });
+  const rows=Object.values(byName).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  return (
+    <div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px',gap:'10px',flexWrap:'wrap'}}>
+        <div>
+          <h3 style={{margin:0,fontSize:'16px',fontWeight:'500'}}>Groups</h3>
+          <div style={{fontSize:'13px',color:'#64748b',marginTop:'2px'}}>The fundraising partners you call for. Add a logo so callers see it on their leads. Renaming updates every lead in the group.</div>
+        </div>
+        <button style={BTN(true)} onClick={onAdd}><Plus size={14}/>Add group</button>
+      </div>
+      {rows.length===0?(
+        <div style={{...CARD,padding:'48px',textAlign:'center',color:'#64748b'}}>
+          <Building2 size={32} style={{margin:'0 auto 12px',display:'block',opacity:0.4}}/>
+          <div style={{fontWeight:'500',marginBottom:'6px'}}>No groups yet</div>
+          <div style={{fontSize:'13px',marginBottom:'16px'}}>Add a group, then assign leads to it when you import.</div>
+          <button style={BTN(true)} onClick={onAdd}><Plus size={14}/>Add first group</button>
+        </div>
+      ):(
+        <div style={CARD}>
+          {rows.map(r=>{
+            const stats=groupSecuredStats(r.leads);
+            return (
+              <div key={r.name} style={{display:'flex',alignItems:'center',gap:'12px',padding:'12px 16px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+                {r.def?.logoUrl
+                  ? <img src={r.def.logoUrl} alt="" style={{width:'40px',height:'40px',borderRadius:'8px',objectFit:'cover',flexShrink:0,background:'#fff',border:'0.5px solid var(--color-border-tertiary)'}}/>
+                  : <div style={{width:'40px',height:'40px',borderRadius:'8px',background:r.def?'#101f6b':'var(--color-background-secondary)',color:r.def?'#fff':'#94a3b8',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700',fontSize:'13px',flexShrink:0,border:r.def?'none':'1px dashed var(--color-border-secondary)'}}>{initials(r.name)}</div>}
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:'500',fontSize:'14px'}}>{r.name}{!r.def&&<span style={{fontSize:'11px',color:'#854F0B',marginLeft:'8px'}}>no logo yet</span>}</div>
+                  <div style={{fontSize:'12px',color:'#64748b'}}>{r.leads.length} lead{r.leads.length===1?'':'s'} · {stats.secured} secured · {fmt$(stats.cardValue)} value</div>
+                </div>
+                <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px'}} onClick={()=>onEdit(r.def||{name:r.name})}><Pencil size={12}/>{r.def?'Edit':'Add logo'}</button>
+                {r.def&&<button onClick={()=>onDelete(r.def.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}} title="Remove group definition (leads keep their name)"><Trash2 size={12}/></button>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const GROUP_LOGO_BUCKET = 'group-logos';
+function GroupMetaModal({ group, onSave, onClose }) {
+  const [name,setName]=useState(group?.name||'');
+  const [logoUrl,setLogoUrl]=useState(group?.logoUrl||'');
+  const [uploading,setUploading]=useState(false); const [err,setErr]=useState('');
+  const fileRef=useRef(null);
+  const uploadLogo=async(file)=>{
+    if(!file) return;
+    setUploading(true); setErr('');
+    try{
+      if(file.size>5*1048576) throw new Error('Logo must be under 5 MB');
+      const ext=(file.name.split('.').pop()||'png').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,4)||'png';
+      const path=`${slug(name||'group')}-${Date.now().toString(36)}${Math.floor(Math.random()*1e4).toString(36)}.${ext}`;
+      const {error}=await supabase.storage.from(GROUP_LOGO_BUCKET).upload(path,file,{upsert:true,contentType:file.type||undefined});
+      if(error) throw error;
+      const {data}=supabase.storage.from(GROUP_LOGO_BUCKET).getPublicUrl(path);
+      setLogoUrl(data.publicUrl);
+    }catch(e){ setErr('Logo upload failed ('+(e.message||e)+'). Create a public bucket named “'+GROUP_LOGO_BUCKET+'” in Supabase Storage.'); }
+    finally{ setUploading(false); if(fileRef.current) fileRef.current.value=''; }
+  };
+  return (
+    <ModalWrap title={group?.id?'Edit group':'Add group'} onClose={onClose}>
+      <Field label="Group / organization name"><input style={INP} value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. South Carolina IFC" autoFocus/></Field>
+      <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'6px',fontWeight:'500'}}>Logo</label>
+      <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'14px'}}>
+        {logoUrl
+          ? <img src={logoUrl} alt="" style={{width:'52px',height:'52px',borderRadius:'8px',objectFit:'cover',background:'#fff',border:'0.5px solid var(--color-border-tertiary)'}}/>
+          : <div style={{width:'52px',height:'52px',borderRadius:'8px',background:'var(--color-background-secondary)',border:'1px dashed var(--color-border-secondary)',display:'flex',alignItems:'center',justifyContent:'center',color:'#94a3b8'}}><Building2 size={20}/></div>}
+        <div>
+          <button style={BTN(false)} onClick={()=>fileRef.current?.click()} disabled={uploading}><Upload size={13}/>{uploading?'Uploading…':logoUrl?'Replace logo':'Upload logo'}</button>
+          {logoUrl&&<button style={{...BTN(false),marginLeft:'8px'}} onClick={()=>setLogoUrl('')}>Remove</button>}
+          <input ref={fileRef} type="file" accept="image/*" style={{display:'none'}} onChange={e=>uploadLogo(e.target.files?.[0])}/>
+        </div>
+      </div>
+      {err&&<div style={{fontSize:'12px',color:'#A32D2D',marginBottom:'12px'}}>{err}</div>}
+      <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
+        <button style={BTN(false)} onClick={onClose}>Cancel</button>
+        <button style={{...BTN(true),opacity:name.trim()?1:0.5}} disabled={!name.trim()} onClick={()=>onSave({...(group?.id?{id:group.id}:{}),name,logoUrl})}>Save group</button>
+      </div>
+    </ModalWrap>
+  );
+}
+
 // ── Super-admin: guaranteed discounts — where every confirmed deal is, exportable, with the video ──
 function AdminDiscountsView({ employees, calls }) {
   const [q,setQ]=useState('');
@@ -2206,12 +2415,28 @@ function DiscountRow({ call, callerName, area, date, status }) {
 const Bar = ({pct,color='#1D9E75'}) => <div style={{height:'6px',background:'var(--color-border-tertiary)',borderRadius:'3px',overflow:'hidden'}}><div style={{width:`${Math.min(100,pct)}%`,height:'100%',background:color,borderRadius:'3px'}}/></div>;
 const leadContacted = c => c.status!=='to_call';
 const leadDone = c => c.status==='completed'||c.status==='interested'||c.status==='recorded';
+// Group accumulation (Phase 2.2) — secured discounts + card value, always computed, never stored.
+// There is no target/goal; these numbers only go up. "Card value" uses a per-lead cardValue if we
+// ever capture one, otherwise the approved payout, otherwise the assigned per-call value.
+const leadSecured = c => leadDone(c) || c?.verifyStatus==='approved';
+const leadCardValue = c => c?.cardValue!=null ? +c.cardValue : (c?.payout?.amount!=null ? +c.payout.amount : (leadValue(c)||0));
+const groupSecuredStats = list => {
+  const secured=list.filter(leadSecured);
+  const weekAgo=addDays(today(),-7);
+  return {
+    secured: secured.length,
+    cardValue: secured.reduce((s,c)=>s+leadCardValue(c),0),
+    thisWeek: secured.filter(c=>((c.recordedAt||c.payout?.postedAt||'').split('T')[0]||'')>=weekAgo).length,
+  };
+};
+// Match a lead's free-text group name to a po_groups definition (for its logo), case-insensitive.
+const groupLogo = (groupsList,name) => (groupsList||[]).find(g=>(g.name||'').trim().toLowerCase()===(name||'').trim().toLowerCase())?.logoUrl||'';
 const leadState = c => { const s=(c.addresses?.[0]?.state||'').trim(); if(s) return s; const l=(c.location||'').trim(); if(l.includes(',')) return l.split(',').pop().trim(); return 'Unknown'; };
 const leadCity  = c => { const ci=(c.addresses?.[0]?.city||'').trim(); if(ci) return ci; const l=(c.location||'').trim(); if(l.includes(',')) return l.split(',')[0].trim(); return l||'—'; };
 
 const leadGroup = (c,by) => by==='city'?leadCity(c):by==='school'?(c.school||'No school/org'):by==='group'?(c.group||'No group'):leadState(c);
 
-function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImport, onMarkTouch, onSetValue, onEditGroup }) {
+function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImport, onMarkTouch, onSetValue, onEditGroup, onCallAgain }) {
   const [areaCaller,setAreaCaller]=useState('all');
   const [groupBy,setGroupBy]=useState('group');
   const [openState,setOpenState]=useState('');
@@ -2328,24 +2553,56 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
                 </div>
                 <Bar pct={pct} color={pct>=50?'#1D9E75':'#EF9F27'}/>
               </div>
-              {open&&[...a.list].sort((x,y)=>leadCity(x).localeCompare(leadCity(y))||(x.business||'').localeCompare(y.business||'')).map(c=>{
-                const st=CALL_STATUS[c.status]||CALL_STATUS.to_call;
-                return (
-                  <div key={c.id} style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'12px',alignItems:'center',padding:'10px 18px 10px 30px',borderTop:'0.5px solid var(--color-border-tertiary)',background:'var(--color-background-secondary)'}}>
-                    <div style={{minWidth:0}}><div style={{fontSize:'13px',fontWeight:'500'}}>{c.business}</div><div style={{fontSize:'11px',color:'#64748b'}}>{[groupBy!=='group'?c.group:null,leadCity(c),c.callerId?nameOf(c.callerId):(!leadClaimed(c)&&leadPool(c).length>1?`${leadPool(c).length} callers`:null)].filter(Boolean).join(' · ')}</div></div>
-                    <div style={{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap',justifyContent:'flex-end'}}>
-                      {c.payout?.amount!=null?<Badge color="teal">{fmt$(c.payout.amount)} paid</Badge>:<span title="What this call pays the caller"><ValueSelect value={leadValue(c)||''} onChange={v=>onSetValue(c.id,v)}/></span>}
-                      {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:'#185FA5'}}>{fmtDateTime(c.callbackDate,c.callbackTime)}</span>}
-                      <Badge color={st.color}>{st.label}</Badge>
-                    </div>
-                    <button onClick={()=>onDelete(c.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
-                  </div>
-                );
-              })}
+              {open&&[...a.list].sort((x,y)=>leadCity(x).localeCompare(leadCity(y))||(x.business||'').localeCompare(y.business||'')).map(c=>(
+                <AdminCoverageLeadRow key={c.id} c={c} groupBy={groupBy} nameOf={nameOf} onSetValue={onSetValue} onDelete={onDelete} onCallAgain={onCallAgain}/>
+              ))}
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// Admin coverage row — shows decline pattern (both ladders), reopen date, and a Call-again-now override.
+function AdminCoverageLeadRow({ c, groupBy, nameOf, onSetValue, onDelete, onCallAgain }) {
+  const [open,setOpen]=useState(false);
+  const st=CALL_STATUS[c.status]||CALL_STATUS.to_call;
+  const gk=c.gatekeeperDeclineCount||0, ow=c.ownerDeclineCount||0;
+  const hasDecline=gk>0||ow>0;
+  const cooldownOver=declineCooldownOver(c);
+  const history=c.declineHistory||[];
+  return (
+    <div style={{borderTop:'0.5px solid var(--color-border-tertiary)',background:'var(--color-background-secondary)'}}>
+      <div style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'12px',alignItems:'center',padding:'10px 18px 10px 30px'}}>
+        <div style={{minWidth:0}} onClick={()=>hasDecline&&setOpen(o=>!o)}>
+          <div style={{fontSize:'13px',fontWeight:'500',cursor:hasDecline?'pointer':'default'}}>{c.business}{hasDecline&&(open?' ▾':' ▸')}</div>
+          <div style={{fontSize:'11px',color:'#64748b'}}>{[groupBy!=='group'?c.group:null,leadCity(c),c.callerId?nameOf(c.callerId):(!leadClaimed(c)&&leadPool(c).length>1?`${leadPool(c).length} callers`:null)].filter(Boolean).join(' · ')}</div>
+          {hasDecline&&<div style={{fontSize:'11px',color:cooldownOver?'#0F6E56':'#854F0B',marginTop:'2px',fontWeight:'500'}}>
+            {c.permanentlyDeclined?'Owner said no — set aside 1 yr':cooldownOver?'Cooldown over — back in the queue':`Back on ${fmtDate(c.nextEligibleDate)}`}
+            {` · gatekeeper ${gk} · owner ${ow}`}{c.lastDeclineLevel?` · last: ${DECLINE_LEVELS[c.lastDeclineLevel]||c.lastDeclineLevel}`:''}
+          </div>}
+        </div>
+        <div style={{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap',justifyContent:'flex-end'}}>
+          {c.payout?.amount!=null?<Badge color="teal">{fmt$(c.payout.amount)} paid</Badge>:<span title="What this call pays the caller"><ValueSelect value={leadValue(c)||''} onChange={v=>onSetValue(c.id,v)}/></span>}
+          {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:'#185FA5'}}>{callbackWhen(c)}</span>}
+          {c.status==='not_interested'&&!cooldownOver&&<button style={{...BTN(false),padding:'4px 9px',fontSize:'11px'}} onClick={()=>onCallAgain(c.id)}><Phone size={11}/>Call again now</button>}
+          <Badge color={st.color}>{st.label}</Badge>
+        </div>
+        <button onClick={()=>onDelete(c.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
+      </div>
+      {open&&history.length>0&&(
+        <div style={{padding:'0 18px 12px 30px'}}>
+          <div style={{background:'var(--color-background-primary)',border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'8px 12px'}}>
+            <div style={{fontSize:'11px',fontWeight:'600',color:'#64748b',marginBottom:'6px'}}>Decline history</div>
+            {history.map((h,i)=>(
+              <div key={i} style={{fontSize:'11px',color:'#0f172a',padding:'3px 0',borderTop:i?'0.5px solid var(--color-border-tertiary)':'none'}}>
+                <span style={{color:'#64748b'}}>{fmtDate(h.date)}</span> · {DECLINE_LEVELS[h.declineLevel]||h.declineLevel} · {nameOf(h.callerId)}{h.notes?` — ${h.notes}`:''}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2423,15 +2680,37 @@ const LEAD_GUESS = {
   additionalInfo:/additional|info|detail|specific/i, notes:/note|comment|remark/i,
 };
 
-function LeadImportModal({ employees, onImport, onClose }) {
+// Duplicate detection for import (Phase 3.3) — normalize, then compare within the same group.
+const normName = s => (s||'').toString().toLowerCase().replace(/[^a-z0-9]/g,'');
+const normDigits = s => (s||'').toString().replace(/\D/g,'').slice(-10);
+const leadAddrKey = c => normName((c.addresses?.[0]?.street||'')+(c.addresses?.[0]?.city||'')) || normName(c.location);
+// Returns 'dup' (auto-skip), 'ambiguous' (needs a human), or null (distinct).
+const dupLevel = (a,b) => {
+  const an=normName(a.business), bn=normName(b.business);
+  if(!an||!bn) return null;
+  const nameExact = an===bn;
+  const nameSimilar = !nameExact && an.length>=4 && bn.length>=4 && (an.includes(bn)||bn.includes(an));
+  const ap=normDigits(a.phone), bp=normDigits(b.phone), phoneSame = !!ap && ap===bp;
+  const aa=leadAddrKey(a), ba=leadAddrKey(b), addrSame = !!aa && aa===ba;
+  if(nameExact && (phoneSame||addrSame)) return 'dup';
+  if(phoneSame && addrSame) return 'dup';
+  if(nameExact || nameSimilar) return 'ambiguous';
+  return null;
+};
+
+function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose }) {
   const [step,setStep]=useState('upload');
   const [headers,setHeaders]=useState([]);
   const [rows,setRows]=useState([]);
   const [map,setMap]=useState({});
   const [callerIds,setCallerIds]=useState([]);
   const [group,setGroup]=useState('');
+  const [newGroupMode,setNewGroupMode]=useState(false); // pick an existing group vs. type a new one
   const [batchValue,setBatchValue]=useState(0);
   const [dragOver,setDragOver]=useState(false);
+  const [review,setReview]=useState(null); // {clean, ambiguous:[{row,match}], dup, gid}
+  const [keepDecision,setKeepDecision]=useState({}); // ambiguous index -> 'keep' | 'skip'
+  const [done,setDone]=useState(null); // {imported, skipped}
   const fileRef=useRef();
 
   const processFile=file=>{
@@ -2456,7 +2735,81 @@ function LeadImportModal({ employees, onImport, onClose }) {
     };
   };
   const validRows=rows.filter(r=>map.business&&(r[map.business]||'').toString().trim());
-  const confirm=()=>{ if(!callerIds.length) return; onImport(validRows.map(build), callerIds); };
+  const groupName=group.trim();
+  const matchedGroupId=(groups.find(g=>(g.name||'').trim().toLowerCase()===groupName.toLowerCase())||{}).id||null;
+  // Every group name the app already knows — defined groups (po_groups) plus any name that lives only on a lead —
+  // so a batch can be added to an EXISTING group, not just a new one.
+  const existingGroupNames=[...new Set([...groups.map(g=>g.name),...existing.map(c=>c.group)].map(s=>(s||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  // Compare each incoming lead against existing leads in the same group + rows already accepted this batch.
+  const runDedup=()=>{
+    const built=validRows.map(build);
+    const inGroup=existing.filter(c=>(c.group||'').trim().toLowerCase()===groupName.toLowerCase());
+    const clean=[]; const ambiguous=[]; let dup=0; const accepted=[];
+    built.forEach(row=>{
+      let level=null, match=null;
+      for(const e of [...inGroup,...accepted]){ const lv=dupLevel(row,e); if(lv==='dup'){level='dup';match=e;break;} if(lv==='ambiguous'&&!level){level='ambiguous';match=e;} }
+      if(level==='dup'){ dup++; return; }
+      if(level==='ambiguous'){ ambiguous.push({row,match}); return; }
+      clean.push(row); accepted.push(row);
+    });
+    return {clean,ambiguous,dup};
+  };
+  const confirm=()=>{
+    if(!(map.business&&validRows.length)) return;
+    const r=runDedup();
+    if(r.ambiguous.length>0){ setReview(r); setKeepDecision({}); setStep('review'); }
+    else finalize(r.clean, r.dup);
+  };
+  const finalize=(rowsToImport,skipped)=>{
+    const leads=rowsToImport.map(l=>({...l, ...(matchedGroupId?{groupId:matchedGroupId}:{})}));
+    onImport(leads, callerIds, {group:groupName, groupId:matchedGroupId});
+    setDone({imported:leads.length, skipped});
+    setStep('done');
+  };
+  const finishReview=()=>{
+    const kept=review.ambiguous.filter((_,i)=>keepDecision[i]==='keep').map(a=>a.row);
+    const skippedAmb=review.ambiguous.length - kept.length;
+    finalize([...review.clean, ...kept], review.dup + skippedAmb);
+  };
+
+  if(step==='done'&&done) return (
+    <ModalWrap title="Import complete" onClose={onClose}>
+      <div style={{textAlign:'center',padding:'16px 8px'}}>
+        <CheckCircle size={34} style={{color:'#0F6E56',margin:'0 auto 12px',display:'block'}}/>
+        <div style={{fontSize:'16px',fontWeight:'600',marginBottom:'6px'}}>Imported {done.imported} lead{done.imported===1?'':'s'}</div>
+        {done.skipped>0&&<div style={{fontSize:'13px',color:'#854F0B'}}>{done.skipped} duplicate{done.skipped===1?'':'s'} skipped</div>}
+        {callerIds.length===0&&done.imported>0&&<div style={{fontSize:'12px',color:'#64748b',marginTop:'8px'}}>These are unassigned — assign callers from the group’s Edit panel when you’re ready.</div>}
+      </div>
+      <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={onClose}>Done</button>
+    </ModalWrap>
+  );
+
+  if(step==='review'&&review) return (
+    <ModalWrap title="Review possible duplicates" onClose={onClose} wide>
+      <div style={{fontSize:'13px',color:'#64748b',marginBottom:'12px'}}>{review.clean.length} new leads are ready and {review.dup} exact duplicate{review.dup===1?'':'s'} will be skipped. These {review.ambiguous.length} look similar to a lead you already have — keep both, or treat as a duplicate?</div>
+      <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px',maxHeight:'340px',overflowY:'auto'}}>
+        {review.ambiguous.map((a,i)=>{
+          const dec=keepDecision[i];
+          return (
+            <div key={i} style={{border:'0.5px solid var(--color-border-tertiary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px'}}>
+              <div style={{display:'flex',gap:'12px',fontSize:'12px',marginBottom:'8px',flexWrap:'wrap'}}>
+                <div style={{flex:1,minWidth:0}}><div style={{fontSize:'11px',color:'#64748b'}}>Importing</div><div style={{fontWeight:'600'}}>{a.row.business}</div><div style={{color:'#64748b'}}>{[a.row.phone,a.row.location].filter(Boolean).join(' · ')||'no contact info'}</div></div>
+                <div style={{flex:1,minWidth:0}}><div style={{fontSize:'11px',color:'#64748b'}}>Already have</div><div style={{fontWeight:'600'}}>{a.match.business}</div><div style={{color:'#64748b'}}>{[a.match.phone,a.match.location].filter(Boolean).join(' · ')||'no contact info'}</div></div>
+              </div>
+              <div style={{display:'flex',gap:'8px'}}>
+                <button style={{...BTN(dec==='keep'),flex:1,justifyContent:'center',fontSize:'12px'}} onClick={()=>setKeepDecision(d=>({...d,[i]:'keep'}))}>Keep both (different)</button>
+                <button style={{...BTN(dec==='skip'),flex:1,justifyContent:'center',fontSize:'12px'}} onClick={()=>setKeepDecision(d=>({...d,[i]:'skip'}))}>It’s a duplicate — skip</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
+        <button style={BTN(false)} onClick={()=>setStep('map')}>Back</button>
+        <button style={{...BTN(true),opacity:review.ambiguous.every((_,i)=>keepDecision[i])?1:0.5}} disabled={!review.ambiguous.every((_,i)=>keepDecision[i])} onClick={finishReview}>Finish import</button>
+      </div>
+    </ModalWrap>
+  );
 
   if(step==='upload') return (
     <ModalWrap title="Import merchant leads" onClose={onClose} wide>
@@ -2472,8 +2825,24 @@ function LeadImportModal({ employees, onImport, onClose }) {
 
   return (
     <ModalWrap title={`Map columns — ${validRows.length} leads`} onClose={onClose} wide>
-      <div style={{marginBottom:'12px'}}><Field label="Calling for (group / organization) — shown to callers"><input style={INP} value={group} onChange={e=>setGroup(e.target.value)} placeholder="e.g. South Carolina IFC"/></Field></div>
-      <div style={{marginBottom:'12px'}}><MultiEmpPicker employees={employees} value={callerIds} onChange={setCallerIds} label="Assign these leads to caller(s) — tap to add more"/></div>
+      <div style={{marginBottom:'12px'}}>
+        <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>Calling for (group / organization) — shown to callers</label>
+        {existingGroupNames.length>0&&!newGroupMode?(
+          <select style={INP} value={existingGroupNames.includes(groupName)?groupName:''} onChange={e=>{ if(e.target.value==='__new__'){setNewGroupMode(true);setGroup('');} else setGroup(e.target.value); }}>
+            <option value="">— Add to an existing group —</option>
+            {existingGroupNames.map(n=><option key={n} value={n}>{n}</option>)}
+            <option value="__new__">＋ New group…</option>
+          </select>
+        ):(
+          <div style={{display:'flex',gap:'8px'}}>
+            <input style={INP} value={group} onChange={e=>setGroup(e.target.value)} placeholder="New group name — e.g. South Carolina IFC" autoFocus/>
+            {existingGroupNames.length>0&&<button style={BTN(false)} onClick={()=>{setNewGroupMode(false);setGroup('');}}>Pick existing</button>}
+          </div>
+        )}
+        {groupName&&!newGroupMode&&<div style={{fontSize:'11px',color:'#0F6E56',marginTop:'4px'}}>Adding to existing group “{groupName}”.</div>}
+        {groupName&&newGroupMode&&!matchedGroupId&&<div style={{fontSize:'11px',color:'#854F0B',marginTop:'4px'}}>New group — add a logo for it later under the Groups tab.</div>}
+      </div>
+      <div style={{marginBottom:'12px'}}><MultiEmpPicker employees={employees} value={callerIds} onChange={setCallerIds} label="Assign these leads to caller(s) — optional, tap to add"/></div>
       <div style={{marginBottom:'12px'}}>
         <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>{map.value?'Fallback payout — used only for rows where your “Payout per call” column is blank':'Standard payout for this whole batch (or map a “Payout per call” column below for per-lead amounts)'}{batchValue?` — $${batchValue}`:''}</label>
         <ValuePicker value={batchValue} onChange={setBatchValue}/>
@@ -2505,7 +2874,7 @@ function LeadImportModal({ employees, onImport, onClose }) {
       {!map.business&&<div style={{display:'flex',alignItems:'center',gap:'7px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#854F0B',marginBottom:'14px'}}><AlertTriangle size={14} style={{flexShrink:0}}/><span>Pick which column is the <b>Business name</b> — it’s required.</span></div>}
       <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
         <button style={BTN(false)} onClick={()=>setStep('upload')}>Back</button>
-        <button style={{...BTN(true),opacity:(callerIds.length&&map.business&&validRows.length)?1:0.5}} disabled={!(callerIds.length&&map.business&&validRows.length)} onClick={confirm}>Import {validRows.length} leads</button>
+        <button style={{...BTN(true),opacity:(map.business&&validRows.length)?1:0.5}} disabled={!(map.business&&validRows.length)} onClick={confirm}>Import {validRows.length} leads</button>
       </div>
     </ModalWrap>
   );
@@ -2549,6 +2918,7 @@ export default function TailgatePayday() {
   const [deals,setDeals]=useState([]);
   const [assignments,setAssignments]=useState([]);
   const [orgs,setOrgs]=useState([]);
+  const [groups,setGroups]=useState([]); // po_groups: {id,name,logoUrl,createdAt}
   const [loading,setLoading]=useState(true);
   const [modal,setModal]=useState(null);
   const [calls,setCalls]=useState([]);
@@ -2568,8 +2938,10 @@ export default function TailgatePayday() {
   // Data load
   useEffect(()=>{
     if(!session) return;
-    Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn'),loadS('po_calls'),loadS('po_signups'),loadS('po_orgs')]).then(([e,d,a,c,s,o])=>{
-      setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setCalls(Array.isArray(c)?c:[]); setSignups(Array.isArray(s)?s:[]); setOrgs(Array.isArray(o)?o:[]); setLoading(false);
+    Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn'),loadS('po_calls'),loadS('po_signups'),loadS('po_orgs'),loadS('po_groups')]).then(([e,d,a,c,s,o,g])=>{
+      const rawCalls=Array.isArray(c)?c:[]; const migratedCalls=migrateCalls(rawCalls);
+      if(migratedCalls!==rawCalls) saveS('po_calls',migratedCalls); // persist the backfill once
+      setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setCalls(migratedCalls); setSignups(Array.isArray(s)?s:[]); setOrgs(Array.isArray(o)?o:[]); setGroups(Array.isArray(g)?g:[]); setLoading(false);
     });
   },[session]);
 
@@ -2600,6 +2972,21 @@ export default function TailgatePayday() {
   };
   const setSU=v=>{setSignups(v);saveS('po_signups',v);};
   const setO=v=>{setOrgs(v);saveS('po_orgs',v);};
+  const setG=v=>{setGroups(v);saveS('po_groups',v);};
+  // Super-admin Groups (Phase 3.2): persistent group definitions with logos. Renaming also
+  // renames the group on every matching lead so logos + accumulation stay joined by name.
+  const saveGroupMeta=g=>{
+    const name=(g.name||'').trim(); if(!name) return;
+    if(g.id){
+      const prev=groups.find(x=>x.id===g.id);
+      setG(groups.map(x=>x.id===g.id?{...x,name,logoUrl:g.logoUrl||''}:x));
+      if(prev&&prev.name!==name) setC(calls.map(c=>((c.group||'')===prev.name)?{...c,group:name}:c));
+    } else {
+      setG([...groups,{id:genId(),name,logoUrl:g.logoUrl||'',createdAt:new Date().toISOString()}]);
+    }
+    setModal(null);
+  };
+  const deleteGroupMeta=id=>setG(groups.filter(g=>g.id!==id));
   const addOrg=o=>{ setO([...orgs,{...o,id:genId(),createdAt:new Date().toISOString()}]); setModal(null); };
   const deleteOrg=id=>setO(orgs.filter(o=>o.id!==id));
   // A signed-in user with no roster match — log it once so the admin can add them
@@ -2612,7 +2999,7 @@ export default function TailgatePayday() {
 
   // Merchant call assignments / mini-CRM
   const addCall=rec=>{ setC([...calls,{...rec,id:genId(),status:'to_call',createdAt:new Date().toISOString()}]); setModal(null); };
-  const addLeads=(leads,callerIds)=>{ const ls=leads.map(l=>({...l,id:genId(),callerIds,status:'to_call',createdAt:new Date().toISOString()})); setC([...calls,...ls]); setModal(null); };
+  const addLeads=(leads,callerIds)=>{ const ls=leads.map(l=>({...l,id:genId(),callerIds:callerIds||[],status:'to_call',createdAt:new Date().toISOString()})); setC([...calls,...ls]); }; // modal shows its own summary, then closes
   const updateCall=(id,patch)=>patchCall(id,patch); // merge-write so caller claims survive concurrent edits
   // Super-admin group edit: rename the group, reassign its caller pool, and set a due date — applied to every lead in that group.
   const updateGroup=(groupKey,{name,callerIds,due})=>{
@@ -2625,6 +3012,8 @@ export default function TailgatePayday() {
   const rejectCall=id=>setC(calls.map(c=>c.id===id?{...c,verifyStatus:'rejected'}:c));
   const markTouch=id=>setC(calls.map(c=>{ if(c.id!==id) return c; const done=(c.followUp?.touchesDone||0)+1; return {...c,followUp:{touchesDone:done,nextDue:done>=FOLLOWUP_TOUCHES?null:addDays(today(),2)}}; }));
   const deleteCall=id=>setC(calls.filter(c=>c.id!==id));
+  // Admin override: clear a not-interested cooldown so a stronger closer can retry right now.
+  const callAgainNow=id=>updateCall(id,{nextEligibleDate:today(),permanentlyDeclined:false});
 
   // Approve a confirmed call → post one standalone entry into the caller's merchant payouts.
   // Reuses the po_asgn period structure so it flows into Merchant Reps, Payments & Payroll untouched.
@@ -2676,9 +3065,9 @@ export default function TailgatePayday() {
   if(recovery) return <ResetPasswordPage onDone={()=>setRecovery(false)} onCancel={()=>{setRecovery(false);signOut();}}/>;
   if(!session) return <LoginPage/>;
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#64748b',fontSize:'14px'}}>Loading…</div>;
-  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess}/>;
+  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} groups={groups} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess}/>;
 
-  const TABS=[['employees','Employees',Users],['orgs','Organizations',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['discounts','Discounts',MapPin],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
+  const TABS=[['employees','Employees',Users],['orgs','Organizations',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['groups','Groups',Users],['discounts','Discounts',MapPin],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
 
   return (
     <div style={{padding:'20px',maxWidth:'980px',margin:'0 auto',fontFamily:'var(--font-sans)'}}>
@@ -2708,7 +3097,8 @@ export default function TailgatePayday() {
       {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onImportCSV={()=>setModal({type:'importCSV'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
       {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
       {tab==='payroll'&&<PayrollView employees={employees} deals={deals} assignments={assignments}/>}
-      {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})} onEditGroup={(groupKey,data)=>setModal({type:'editGroup',data:{groupKey,...data}})}/>}
+      {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})} onEditGroup={(groupKey,data)=>setModal({type:'editGroup',data:{groupKey,...data}})} onCallAgain={callAgainNow}/>}
+      {tab==='groups'&&<AdminGroupsView groups={groups} calls={calls} onAdd={()=>setModal({type:'groupMeta'})} onEdit={g=>setModal({type:'groupMeta',data:g})} onDelete={deleteGroupMeta}/>}
       {tab==='discounts'&&<AdminDiscountsView employees={employees} calls={calls}/>}
 
       {modal?.type==='addEmp'&&<AddEmployeeModal initialEmail={modal.data?.email} onAdd={addEmployee} onClose={()=>setModal(null)}/>}
@@ -2717,8 +3107,9 @@ export default function TailgatePayday() {
       {modal?.type==='importCSV'&&<CSVImportModal employees={employees} assignments={assignments} onSave={updated=>{setA(updated);setModal(null);}} onClose={()=>setModal(null)}/>}
       {modal?.type==='payStub'&&<PayStubModal emp={modal.data.emp} period={modal.data.p} onClose={()=>setModal(null)}/>}
       {modal?.type==='addCall'&&<AddCallModal employees={employees} onAdd={addCall} onClose={()=>setModal(null)}/>}
-      {modal?.type==='importLeads'&&<LeadImportModal employees={employees} onImport={addLeads} onClose={()=>setModal(null)}/>}
+      {modal?.type==='importLeads'&&<LeadImportModal employees={employees} existing={calls} groups={groups} onImport={addLeads} onClose={()=>setModal(null)}/>}
       {modal?.type==='editGroup'&&<GroupEditModal employees={employees} group={modal.data} onSave={updateGroup} onClose={()=>setModal(null)}/>}
+      {modal?.type==='groupMeta'&&<GroupMetaModal group={modal.data} onSave={saveGroupMeta} onClose={()=>setModal(null)}/>}
     </div>
   );
 }
