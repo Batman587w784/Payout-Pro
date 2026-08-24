@@ -2649,7 +2649,7 @@ function GroupEditModal({ employees, group, onSave, onClose }) {
       {!name.trim()&&<div style={{fontSize:'12px',color:'#854F0B',marginTop:'-6px',marginBottom:'12px'}}>Leaving this blank keeps these leads ungrouped (shown as “No group”).</div>}
       <MultiEmpPicker employees={employees} value={callerIds} onChange={setCallerIds} label="Who can call this group — tap to add or remove"/>
       {callerIds.length===0&&<div style={{fontSize:'12px',color:'#854F0B',marginTop:'-6px',marginBottom:'12px'}}>With no callers assigned, these leads won’t appear for anyone until you add someone.</div>}
-      <div style={{fontSize:'11px',color:'#64748b',marginTop:'-4px',marginBottom:'12px'}}>Leads a caller has already claimed stay with that caller; this sets who can pick up the rest.</div>
+      <div style={{fontSize:'11px',color:'#64748b',marginTop:'-4px',marginBottom:'12px'}}>Removing a caller hands their still-to-call leads in this group to whoever’s left. Completed deals stay with whoever closed them. Callers see the change within a few seconds.</div>
       <Field label="Due date (finish-by goal)"><input style={INP} type="date" value={due} onChange={e=>setDue(e.target.value)}/></Field>
       <div style={{fontSize:'12px',color:'#64748b',marginTop:'-4px',marginBottom:'14px'}}>Drives the countdown callers see. Leave blank to use the default {GROUP_DEADLINE_DAYS}-day window from the first lead.</div>
       <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={submit}>Save changes</button>
@@ -3004,7 +3004,15 @@ export default function TailgatePayday() {
   // Super-admin group edit: rename the group, reassign its caller pool, and set a due date — applied to every lead in that group.
   const updateGroup=(groupKey,{name,callerIds,due})=>{
     const nm=(name||'').trim();
-    setC(calls.map(c=>((c.group||'No group')!==groupKey)?c:{...c,group:nm,callerIds:callerIds||[],groupDue:due||undefined}));
+    const cids=callerIds||[];
+    setC(calls.map(c=>{
+      if((c.group||'No group')!==groupKey) return c;
+      const patch={...c,group:nm,callerIds:cids,groupDue:due||undefined};
+      // If a still-pending lead is claimed by a caller who's no longer assigned to this group,
+      // release the claim so the new caller(s) actually see it. Completed/approved deals stay put.
+      if(c.callerId && !cids.includes(c.callerId) && !leadDone(c) && c.verifyStatus!=='approved') patch.callerId=null;
+      return patch;
+    }));
     setModal(null);
   };
   // Every recorded take is persisted immediately so a redo can never lose the original
