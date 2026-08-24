@@ -33,7 +33,9 @@ const loadS = async key => {
 const saveS = async (key,val) => {
   const str = JSON.stringify(val);
   localStorage.setItem(key, str); // instant — never lost
-  try { await supabase.from('app_data').upsert({key, value: str}); } catch(e) {}
+  // upsert() returns {error} on DB failures (RLS, size, etc.) instead of throwing — capture and
+  // return it so callers that care (e.g. lead import) can tell the user the write didn't land.
+  try { const { error } = await supabase.from('app_data').upsert({key, value: str}); return error||null; } catch(e) { return e; }
 };
 
 // ─── Utils ────────────────────────────────────────────────────────
@@ -2680,22 +2682,25 @@ const LEAD_GUESS = {
   additionalInfo:/additional|info|detail|specific/i, notes:/note|comment|remark/i,
 };
 
-// Duplicate detection for import (Phase 3.3) — normalize, then compare within the same group.
+// Duplicate detection for import (Phase 3.3) — deliberately CONSERVATIVE: only auto-skip a lead we're
+// confident is the same business, and only ask a human when a same-name match can't be confirmed.
+// Merely sharing a city (or a name fragment) never blocks an import.
 const normName = s => (s||'').toString().toLowerCase().replace(/[^a-z0-9]/g,'');
 const normDigits = s => (s||'').toString().replace(/\D/g,'').slice(-10);
-const leadAddrKey = c => normName((c.addresses?.[0]?.street||'')+(c.addresses?.[0]?.city||'')) || normName(c.location);
+// A meaningful address key needs an actual STREET — city-only is too weak (whole towns would collide).
+const leadStreetKey = c => { const st=normName(c.addresses?.[0]?.street||''); return st.length>=4 ? st : ''; };
 // Returns 'dup' (auto-skip), 'ambiguous' (needs a human), or null (distinct).
 const dupLevel = (a,b) => {
   const an=normName(a.business), bn=normName(b.business);
   if(!an||!bn) return null;
   const nameExact = an===bn;
-  const nameSimilar = !nameExact && an.length>=4 && bn.length>=4 && (an.includes(bn)||bn.includes(an));
-  const ap=normDigits(a.phone), bp=normDigits(b.phone), phoneSame = !!ap && ap===bp;
-  const aa=leadAddrKey(a), ba=leadAddrKey(b), addrSame = !!aa && aa===ba;
-  if(nameExact && (phoneSame||addrSame)) return 'dup';
-  if(phoneSame && addrSame) return 'dup';
-  if(nameExact || nameSimilar) return 'ambiguous';
-  return null;
+  const nameSimilar = !nameExact && an.length>=6 && bn.length>=6 && (an.includes(bn)||bn.includes(an));
+  if(!nameExact && !nameSimilar) return null; // unrelated names → definitely distinct
+  const ap=normDigits(a.phone), bp=normDigits(b.phone), phoneSame = ap.length>=7 && ap===bp;
+  const aa=leadStreetKey(a), ba=leadStreetKey(b), streetSame = !!aa && aa===ba;
+  if(phoneSame || streetSame) return 'dup';   // same-ish name + same phone or street = same business
+  if(nameExact) return 'ambiguous';            // identical name we can't confirm → let a human decide
+  return null;                                 // similar (not identical) name, no contact overlap → distinct
 };
 
 function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose }) {
@@ -2711,6 +2716,8 @@ function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose 
   const [review,setReview]=useState(null); // {clean, ambiguous:[{row,match}], dup, gid}
   const [keepDecision,setKeepDecision]=useState({}); // ambiguous index -> 'keep' | 'skip'
   const [done,setDone]=useState(null); // {imported, skipped}
+  const [saving,setSaving]=useState(false);
+  const [saveErr,setSaveErr]=useState('');
   const fileRef=useRef();
 
   const processFile=file=>{
@@ -2754,22 +2761,34 @@ function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose 
     });
     return {clean,ambiguous,dup};
   };
-  const confirm=()=>{
-    if(!(map.business&&validRows.length)) return;
-    const r=runDedup();
-    if(r.ambiguous.length>0){ setReview(r); setKeepDecision({}); setStep('review'); }
-    else finalize(r.clean, r.dup);
-  };
-  const finalize=(rowsToImport,skipped)=>{
+  // Persist rows and confirm the write landed on the server (onImport throws if it didn't).
+  const importLeads=async(rowsToImport)=>{
+    if(!rowsToImport.length) return 0;
     const leads=rowsToImport.map(l=>({...l, ...(matchedGroupId?{groupId:matchedGroupId}:{})}));
-    onImport(leads, callerIds, {group:groupName, groupId:matchedGroupId});
-    setDone({imported:leads.length, skipped});
-    setStep('done');
+    return await onImport(leads, callerIds, {group:groupName, groupId:matchedGroupId});
   };
-  const finishReview=()=>{
+  const confirm=async()=>{
+    if(!(map.business&&validRows.length)||saving) return;
+    const r=runDedup();
+    setSaving(true); setSaveErr('');
+    try{
+      const n=await importLeads(r.clean); // save the clean leads NOW so review can never lose them
+      if(r.ambiguous.length>0){ setReview({...r,importedClean:n}); setKeepDecision({}); setStep('review'); }
+      else { setDone({imported:n,skipped:r.dup}); setStep('done'); }
+    }catch(e){ setSaveErr('Couldn’t save the import to the server: '+(e.message||e)+' — nothing was saved. Try again.'); }
+    finally{ setSaving(false); }
+  };
+  const finishReview=async()=>{
+    if(saving) return;
     const kept=review.ambiguous.filter((_,i)=>keepDecision[i]==='keep').map(a=>a.row);
     const skippedAmb=review.ambiguous.length - kept.length;
-    finalize([...review.clean, ...kept], review.dup + skippedAmb);
+    setSaving(true); setSaveErr('');
+    try{
+      const n=await importLeads(kept);
+      setDone({imported:(review.importedClean||0)+n, skipped:review.dup+skippedAmb});
+      setStep('done');
+    }catch(e){ setSaveErr('Couldn’t save the reviewed leads: '+(e.message||e)); }
+    finally{ setSaving(false); }
   };
 
   if(step==='done'&&done) return (
@@ -2786,7 +2805,7 @@ function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose 
 
   if(step==='review'&&review) return (
     <ModalWrap title="Review possible duplicates" onClose={onClose} wide>
-      <div style={{fontSize:'13px',color:'#64748b',marginBottom:'12px'}}>{review.clean.length} new leads are ready and {review.dup} exact duplicate{review.dup===1?'':'s'} will be skipped. These {review.ambiguous.length} look similar to a lead you already have — keep both, or treat as a duplicate?</div>
+      <div style={{display:'flex',alignItems:'center',gap:'7px',background:'#E1F5EE',border:'0.5px solid #5DCAA5',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#0F6E56',marginBottom:'12px',fontWeight:'500'}}><CheckCircle size={15}/>{review.importedClean||0} new lead{(review.importedClean||0)===1?'':'s'} already saved{review.dup?` · ${review.dup} exact duplicate${review.dup===1?'':'s'} skipped`:''}. You can close now — or decide on these {review.ambiguous.length} that look similar to a lead you already have.</div>
       <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px',maxHeight:'340px',overflowY:'auto'}}>
         {review.ambiguous.map((a,i)=>{
           const dec=keepDecision[i];
@@ -2804,9 +2823,10 @@ function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose 
           );
         })}
       </div>
+      {saveErr&&<div style={{fontSize:'12px',color:'#A32D2D',marginBottom:'8px'}}>{saveErr}</div>}
       <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
-        <button style={BTN(false)} onClick={()=>setStep('map')}>Back</button>
-        <button style={{...BTN(true),opacity:review.ambiguous.every((_,i)=>keepDecision[i])?1:0.5}} disabled={!review.ambiguous.every((_,i)=>keepDecision[i])} onClick={finishReview}>Finish import</button>
+        <button style={BTN(false)} onClick={onClose}>Close</button>
+        <button style={{...BTN(true),opacity:(review.ambiguous.every((_,i)=>keepDecision[i])&&!saving)?1:0.5}} disabled={!review.ambiguous.every((_,i)=>keepDecision[i])||saving} onClick={finishReview}>{saving?'Saving…':'Finish import'}</button>
       </div>
     </ModalWrap>
   );
@@ -2872,9 +2892,10 @@ function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose 
         </div>
       </div>
       {!map.business&&<div style={{display:'flex',alignItems:'center',gap:'7px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'#854F0B',marginBottom:'14px'}}><AlertTriangle size={14} style={{flexShrink:0}}/><span>Pick which column is the <b>Business name</b> — it’s required.</span></div>}
+      {saveErr&&<div style={{fontSize:'13px',color:'#A32D2D',marginBottom:'10px'}}>{saveErr}</div>}
       <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
-        <button style={BTN(false)} onClick={()=>setStep('upload')}>Back</button>
-        <button style={{...BTN(true),opacity:(map.business&&validRows.length)?1:0.5}} disabled={!(map.business&&validRows.length)} onClick={confirm}>Import {validRows.length} leads</button>
+        <button style={BTN(false)} onClick={()=>setStep('upload')} disabled={saving}>Back</button>
+        <button style={{...BTN(true),opacity:(map.business&&validRows.length&&!saving)?1:0.5}} disabled={!(map.business&&validRows.length)||saving} onClick={confirm}>{saving?'Saving…':`Import ${validRows.length} leads`}</button>
       </div>
     </ModalWrap>
   );
@@ -2999,7 +3020,17 @@ export default function TailgatePayday() {
 
   // Merchant call assignments / mini-CRM
   const addCall=rec=>{ setC([...calls,{...rec,id:genId(),status:'to_call',createdAt:new Date().toISOString()}]); setModal(null); };
-  const addLeads=(leads,callerIds)=>{ const ls=leads.map(l=>({...l,id:genId(),callerIds:callerIds||[],status:'to_call',createdAt:new Date().toISOString()})); setC([...calls,...ls]); }; // modal shows its own summary, then closes
+  // Append imported leads to the FRESHEST server copy (not the admin's possibly-stale local list),
+  // then confirm the write actually landed in Supabase so the leads truly reach the callers.
+  const addLeads=async(leads,callerIds)=>{
+    const ls=leads.map(l=>({...l,id:genId(),callerIds:callerIds||[],status:'to_call',createdAt:new Date().toISOString()}));
+    const server=await loadS('po_calls');
+    const next=[...(Array.isArray(server)?server:calls),...ls];
+    setCalls(next);
+    const err=await saveS('po_calls',next);
+    if(err) throw new Error(err.message||'Could not save to the server'); // surfaced by the import modal
+    return ls.length;
+  };
   const updateCall=(id,patch)=>patchCall(id,patch); // merge-write so caller claims survive concurrent edits
   // Super-admin group edit: rename the group, reassign its caller pool, and set a due date — applied to every lead in that group.
   const updateGroup=(groupKey,{name,callerIds,due})=>{
