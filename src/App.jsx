@@ -272,9 +272,11 @@ function ResetPasswordPage({ onDone, onCancel }) {
 }
 
 // ─── EMPLOYEE / CALLER PORTAL ─────────────────────────────────────
-function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess}) {
+function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess,onSetMyPhone}) {
   const [screen,setScreen]=useState('home');
   const [logId,setLogId]=useState('');
+  const [phoneDraft,setPhoneDraft]=useState('');
+  const [phoneDismissed,setPhoneDismissed]=useState(false); // session-only, so it nudges again next login
   const emp = employees.find(e=>e.email?.toLowerCase()===userEmail?.toLowerCase());
   const requested = useRef(false);
   useEffect(()=>{ // once: if a signed-in user isn't on the roster, flag it for the admin
@@ -306,6 +308,18 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],userEm
           </div>
           <button style={BTN(false)} onClick={onSignOut}><LogOut size={13}/>Sign out</button>
         </div>
+
+        {emp&&!emp.phone&&!phoneDismissed&&onSetMyPhone&&(
+          <div style={{...CARD,padding:'14px 16px',marginBottom:'16px',border:'1px solid #85B7EB',background:'#E6F1FB'}}>
+            <div style={{display:'flex',alignItems:'center',gap:'8px',marginBottom:'8px'}}><Phone size={16} style={{color:'#185FA5'}}/><span style={{fontSize:'14px',fontWeight:'600',color:'#185FA5'}}>Add your cell for follow-up reminders</span></div>
+            <div style={{fontSize:'12px',color:'#3d5a7a',marginBottom:'10px'}}>So you get a text when one of your callbacks is due.</div>
+            <div style={{display:'flex',gap:'8px',flexWrap:'wrap'}}>
+              <input style={{...INP,flex:'1 1 180px'}} placeholder="(555) 000-0000" value={phoneDraft} onChange={e=>setPhoneDraft(e.target.value)} inputMode="tel"/>
+              <button style={{...BTN(true),opacity:phoneDraft.trim()?1:0.5}} disabled={!phoneDraft.trim()} onClick={()=>{onSetMyPhone(emp.id,phoneDraft.trim());setPhoneDismissed(true);}}>Save number</button>
+              <button style={BTN(false)} onClick={()=>setPhoneDismissed(true)}>Not now</button>
+            </div>
+          </div>
+        )}
 
         <div style={{display:'flex',background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'3px',border:'0.5px solid var(--color-border-tertiary)',gap:'2px',marginBottom:'18px',width:'fit-content'}}>
           {TABS.map(([key,label,Icon])=>(
@@ -527,7 +541,7 @@ function PaymentQueue({employees,deals,assignments,onMarkDealPaid,onMarkPeriodPa
 }
 
 // ─── EMPLOYEES ────────────────────────────────────────────────────
-function EmployeesView({employees,deals,assignments,signups=[],onAdd,onAddRequest,onDismissRequest,onDelete}) {
+function EmployeesView({employees,deals,assignments,signups=[],onAdd,onAddRequest,onDismissRequest,onDelete,onSetPhone}) {
   const stats = emp => {
     const p=getPayments(emp.id,deals,assignments);
     return {
@@ -578,6 +592,10 @@ function EmployeesView({employees,deals,assignments,signups=[],onAdd,onAddReques
                   <div style={{flex:1}}>
                     <div style={{fontWeight:'500',fontSize:'14px'}}>{emp.name}</div>
                     {emp.email&&<div style={{fontSize:'11px',color:'var(--color-text-secondary)'}}>{emp.email}</div>}
+                    <div style={{fontSize:'11px',color:emp.phone?'var(--color-text-secondary)':'#b98900',display:'flex',alignItems:'center',gap:'4px'}}>
+                      <Phone size={10}/>{emp.phone||'no phone'}
+                      {onSetPhone&&<button onClick={()=>{const p=window.prompt(`Cell phone for ${emp.name} (for follow-up texts):`,emp.phone||''); if(p!==null) onSetPhone(emp.id,p);}} style={{...BTN(false),padding:'0 6px',fontSize:'10px'}}>{emp.phone?'edit':'add'}</button>}
+                    </div>
                     <div style={{fontSize:'12px',color:'var(--color-text-secondary)'}}>{s.deals} deal{s.deals!==1?'s':''} · {s.periods} period{s.periods!==1?'s':''}</div>
                   </div>
                   <button onClick={()=>onDelete(emp.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
@@ -600,16 +618,18 @@ function EmployeesView({employees,deals,assignments,signups=[],onAdd,onAddReques
 function AddEmployeeModal({onAdd,onClose,initialEmail}) {
   const [name,setName]=useState('');
   const [email,setEmail]=useState(initialEmail||'');
+  const [phone,setPhone]=useState('');
   return (
     <ModalWrap title="Add employee" onClose={onClose}>
       <Field label="Full name"><input style={INP} placeholder="e.g. Sarah Johnson" value={name} onChange={e=>setName(e.target.value)} autoFocus/></Field>
-      <Field label="Email (they'll use this to log in and see their payouts)"><input style={INP} type="email" placeholder="sarah@example.com" value={email} onChange={e=>setEmail(e.target.value)} onKeyDown={e=>e.key==='Enter'&&name&&onAdd(name,email)}/></Field>
+      <Field label="Email (they'll use this to log in and see their payouts)"><input style={INP} type="email" placeholder="sarah@example.com" value={email} onChange={e=>setEmail(e.target.value)}/></Field>
+      <Field label="Cell phone (for follow-up text reminders)"><input style={INP} placeholder="(555) 000-0000" value={phone} onChange={e=>setPhone(e.target.value)} onKeyDown={e=>e.key==='Enter'&&name&&onAdd(name,email,phone)}/></Field>
       <div style={{background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'10px 14px',fontSize:'13px',color:'var(--color-text-secondary)',marginBottom:'14px'}}>
         They can go to the site, create an account with this email, and see only their own payouts.
       </div>
       <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
         <button style={BTN(false)} onClick={onClose}>Cancel</button>
-        <button style={BTN(true)} onClick={()=>name&&onAdd(name,email)}>Add employee</button>
+        <button style={BTN(true)} onClick={()=>name&&onAdd(name,email,phone)}>Add employee</button>
       </div>
     </ModalWrap>
   );
@@ -1305,12 +1325,14 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
   const [cbDate,setCbDate]=useState(call.callbackDate||addDays(today(),1));
   const [availability,setAvailability]=useState(call.availability||'anytime');
   const [declineLevel,setDeclineLevel]=useState(null); // 'owner' | 'gatekeeper' | 'unsure' — required before saving not_interested
+  const [ownerPhone,setOwnerPhone]=useState(call.ownerPhone||''); // owner's personal cell, kept separate from the business line
   const [note,setNote]=useState('');
   const initFirst=(call.decisionMaker?.firstName)||(call.spokeTo||call.contact||'').trim().split(/\s+/)[0]||'there';
   const initBiz=call.business||'your business';
-  const [emailSubject,setEmailSubject]=useState(`${initFirst!=='there'?initFirst+' - ':''}${initBiz} info from Tailgate Fundraising`);
-  // Longer-form overview for "Needs more info" (Phase 3.1) — no specific discount presupposed.
-  const [emailBody,setEmailBody]=useState(`Hi ${initFirst},\n\nGreat talking with you today — here's a fuller picture of how Tailgate Fundraising works for ${initBiz}. No discount decision needed yet.\n\nWhat it is: a community discount card that local schools, teams, and nonprofits sell to raise money. Your business goes on the card with an offer you choose, and cardholders redeem it in person.\n\nHow it works, in three steps:\n1. You submit an offer whenever you're ready — anything from a percentage off to a free item. We'll help you pick something that drives traffic without hurting your margins.\n2. We promote it. Every family, student, and supporter who buys a card sees your business on it and carries it with them all year.\n3. You gain customers. A card in someone's wallet is a reason to walk in your door instead of driving past — and it ties your name to a cause the community cares about.\n\nWhat it costs you: nothing. No fee, no commitment, nothing to buy. You simply honor your offer when someone shows the card.\n\nYou'll also get access to a real-time dashboard — redemptions, foot traffic, and how you compare to other partners — so you can see exactly how it's performing.\n\nWhenever you're ready, use the link below to get started. You can fill in your discount right there, and reply here with any questions.`);
+  const initGroup=call.group||'your local community';
+  const [emailSubject,setEmailSubject]=useState(`${initFirst!=='there'?initFirst+' - ':''}A free way to support ${initGroup}`);
+  // "Needs more info" overview (Phase 3.1) — the fundraising pitch, no specific discount presupposed.
+  const [emailBody,setEmailBody]=useState(`Hi ${initFirst},\n\nThanks for taking my call. We're a fundraising company, and right now we're helping ${initGroup} raise money through a digital discount card. Here's a bit more about how it works and how ${initBiz} fits in.\n\nThe idea is simple: supporters of ${initGroup} buy a discount card, and local businesses like yours put an offer on it that cardholders redeem in person. The money from the cards goes to the group — and your business gets in front of everyone carrying one.\n\nA few things worth knowing:\n\n• It's completely free. No fee, no commitment, nothing to buy. You're just offering a discount — that's the whole ask.\n\n• It's digital. Your offer lives in our app, so you can change or update it any time. Nothing gets printed and locked in.\n\n• It's free advertising. Your name shows up in front of every family and supporter who carries the card, all year, tied to a cause they care about.\n\n• You choose the offer. Anything from a percentage off to a free item. Once you sign up, we put your discount in front of everyone supporting ${initGroup}.\n\nIf you're open to it, you can opt in and submit your discount right here — it only takes a minute:`);
   const [emailed,setEmailed]=useState(false);
   const [sending,setSending]=useState(false);
   const [emailErr,setEmailErr]=useState('');
@@ -1349,6 +1371,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
   const leadInfo=[
     ['Contact', call.contact||call.spokeTo],
     ['Phone', call.phone],
+    ['Owner cell', call.ownerPhone],
     ['Email', call.email],
     ['Category', call.businessType||call.category],
     ['More', call.additionalInfo],
@@ -1419,15 +1442,18 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
 
   const save=()=>{
     const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
-    const details={ decisionMaker:dm, spokeTo, email, phone, business:businessName||call.business,
+    const details={ decisionMaker:dm, spokeTo, email, phone, ownerPhone:ownerPhone.trim(), business:businessName||call.business,
       businessType, category:businessType, addresses, location:loc||call.location||'', offerDetails };
     if(outcome==='completed'){
       if(!hasRecording||!hasOffer) return; // both guarded by the disabled button too
       commit({ status:'completed', verifyStatus:'pending', submittedTake, recordedAt:new Date().toISOString(), ...details });
     } else if(outcome==='needs_info'){
-      commit({ status:'needs_info', ...(submittedTake!=null?{submittedTake}:{}), ...details, ...(emailed?{infoEmailedAt:new Date().toISOString()}:{}) });
+      // Needs info doesn't park the lead — it goes back in the pool as a callback for tomorrow,
+      // flagged that we already sent the info email, so it resurfaces in "follow up" a day later.
+      commit({ status:'callback', callbackDate:addDays(today(),1), availability:'anytime', callbackTime:'',
+        infoSent:true, infoSentAt:new Date().toISOString(), ...(emailed?{infoEmailedAt:new Date().toISOString()}:{}), ...details });
     } else if(outcome==='callback'){
-      commit({ status:'callback', callbackDate:cbDate, availability, callbackTime:'', spokeTo, email, phone, decisionMaker:dm });
+      commit({ status:'callback', callbackDate:cbDate, availability, callbackTime:'', spokeTo, email, phone, ownerPhone:ownerPhone.trim(), decisionMaker:dm });
     } else if(outcome==='no_answer'){
       commit({ status:'no_answer', ...(spokeTo?{spokeTo}:{}) });
     } else if(outcome==='not_interested'){
@@ -1449,6 +1475,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
       <div>
         <DMFields dm={dm} set={setDmF}/>
         <ContactFields email={email} setEmail={setEmail} phone={phone} setPhone={setPhone}/>
+        <Field label="Owner’s personal cell (kept separate — for texts & updates)"><input style={INP} value={ownerPhone} onChange={e=>setOwnerPhone(e.target.value)} placeholder="(555) 000-0000"/></Field>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
           <Field label="Business name"><input style={INP} value={businessName} onChange={e=>setBusinessName(e.target.value)}/></Field>
           <Field label="Business type">
@@ -1579,7 +1606,8 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
       {outcome==='needs_info'&&(
         <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
           <div style={{fontSize:'12px',fontWeight:'600',color:'#854F0B',marginBottom:'4px'}}>Their details</div>
-          <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>They’re interested but need more info or time to decide. Grab everything you can and follow up.</div>
+          <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>Send them the info, then save — this lead comes back to you as a <b>follow-up tomorrow</b>, marked that we already sent an email.</div>
+          {call.infoSent&&<div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:'#0F6E56',marginBottom:'12px',fontWeight:'600'}}><CheckCircle size={14}/>Info email already sent{call.infoSentAt?` on ${fmtDate((call.infoSentAt||'').split('T')[0])}`:''} — this is the follow-up.</div>}
           {detailsForm}
 
           <div style={{borderTop:'0.5px solid var(--color-border-tertiary)',marginTop:'8px',paddingTop:'14px'}}>
@@ -1615,7 +1643,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
             {agreementErr&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'8px'}}>{agreementErr}</div>}
           </div>
           {emailTo&&!emailed&&<div style={{fontSize:'12px',color:'#854F0B',margin:'12px 0 8px',fontWeight:'500'}}>Send the info email (or the agreement) above before you save.</div>}
-          <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'12px'}} onClick={save}>Save — needs more info</button>
+          <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'12px'}} onClick={save}>Save &amp; follow up tomorrow</button>
         </div>
       )}
       {outcome==='callback'&&(
@@ -1794,7 +1822,7 @@ function CallerHome({ myCalls, onOpenLog, groupDefs=[] }) {
                 <Phone size={18} style={{flexShrink:0,color:'#854F0B'}}/>
                 <div style={{minWidth:0,flex:1}}>
                   <div style={{fontSize:'14px',fontWeight:'700',color:'#854F0B'}}>Follow up with {c.business||'this lead'} today</div>
-                  <div style={{fontSize:'12px',color:'#92722f',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{[(c.callbackDate||'')<t?'Was due '+fmtDate(c.callbackDate):'Due today', c.availability?AVAIL_LABEL[c.availability]:null, lastNote].filter(Boolean).join(' · ')}</div>
+                  <div style={{fontSize:'12px',color:'#92722f',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{[(c.callbackDate||'')<t?'Was due '+fmtDate(c.callbackDate):'Due today', c.infoSent?'info email sent':null, c.availability?AVAIL_LABEL[c.availability]:null, lastNote].filter(Boolean).join(' · ')}</div>
                 </div>
                 <ChevronRight size={16} style={{flexShrink:0,color:'#854F0B'}}/>
               </button>
@@ -2632,10 +2660,11 @@ function EditLeadModal({ employees, groupNames=[], call, onSave, onDelete, onClo
   const [location,setLocation]=useState(call.location||'');
   const [value,setValue]=useState(call.value||0);
   const [notes,setNotes]=useState(call.notes||'');
+  const [ownerPhone,setOwnerPhone]=useState(call.ownerPhone||'');
   const [callerIds,setCallerIds]=useState(leadPool(call));
   const claimer=leadClaimed(call)?call.callerId:null;
   const willRelease=claimer && !callerIds.includes(claimer) && !leadDone(call) && call.verifyStatus!=='approved';
-  const save=()=>onSave(call.id,{business:business.trim(),contact:contact.trim(),phone:phone.trim(),email:email.trim(),group:group.trim(),location:location.trim(),value,notes,callerIds});
+  const save=()=>onSave(call.id,{business:business.trim(),contact:contact.trim(),phone:phone.trim(),email:email.trim(),ownerPhone:ownerPhone.trim(),group:group.trim(),location:location.trim(),value,notes,callerIds});
   return (
     <ModalWrap title={`Edit lead — ${call.business||'lead'}`} onClose={onClose} wide>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
@@ -2643,9 +2672,10 @@ function EditLeadModal({ employees, groupNames=[], call, onSave, onDelete, onClo
         <Field label="Contact name"><input style={INP} value={contact} onChange={e=>setContact(e.target.value)}/></Field>
       </div>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
-        <Field label="Phone"><input style={INP} value={phone} onChange={e=>setPhone(e.target.value)} placeholder="(555) 000-0000"/></Field>
+        <Field label="Phone (business)"><input style={INP} value={phone} onChange={e=>setPhone(e.target.value)} placeholder="(555) 000-0000"/></Field>
         <Field label="Email"><input style={INP} value={email} onChange={e=>setEmail(e.target.value)}/></Field>
       </div>
+      <Field label="Owner’s personal cell (kept separate — for texts & updates)"><input style={INP} value={ownerPhone} onChange={e=>setOwnerPhone(e.target.value)} placeholder="(555) 000-0000"/></Field>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
         <Field label="Group / organization"><input style={INP} value={group} onChange={e=>setGroup(e.target.value)} list="tg-editlead-groups" placeholder="e.g. South Carolina IFC"/><datalist id="tg-editlead-groups">{groupNames.map(n=><option key={n} value={n}/>)}</datalist></Field>
         <Field label="Location(s)"><input style={INP} value={location} onChange={e=>setLocation(e.target.value)} placeholder="e.g. Downtown & Eastside"/></Field>
@@ -3142,7 +3172,9 @@ export default function TailgatePayday() {
     a.href=url; a.download=`tailgate-backup-${today()}.json`; a.click(); URL.revokeObjectURL(url);
   };
 
-  const addEmployee=(name,email)=>{ setE([...employees,{id:genId(),name,email:email||'',createdAt:new Date().toISOString()}]); if(email) setSU(signups.filter(s=>s.email.toLowerCase()!==email.toLowerCase())); setModal(null); };
+  const addEmployee=(name,email,phone)=>{ setE([...employees,{id:genId(),name,email:email||'',phone:(phone||'').trim(),createdAt:new Date().toISOString()}]); if(email) setSU(signups.filter(s=>s.email.toLowerCase()!==email.toLowerCase())); setModal(null); };
+  // A caller (or admin) sets an employee's phone — merge-write so we don't clobber concurrent roster edits.
+  const setEmployeePhone=(id,phone)=>{ const next=employees.map(e=>e.id===id?{...e,phone:(phone||'').trim()}:e); setE(next); };
   const deleteEmployee=id=>setE(employees.filter(e=>e.id!==id));
   const addPeriod=(empId,period)=>{ const ex=assignments.find(a=>a.employeeId===empId); if(ex) setA(assignments.map(a=>a.employeeId!==empId?a:{...a,periods:[...a.periods,{...period,id:genId(),paid:false}]})); else setA([...assignments,{id:genId(),employeeId:empId,periods:[{...period,id:genId(),paid:false}]}]); setModal(null); };
   const togglePeriodPaid=(aId,pId)=>setA(assignments.map(a=>a.id!==aId?a:{...a,periods:a.periods.map(p=>p.id!==pId?p:{...p,paid:!p.paid})}));
@@ -3171,7 +3203,7 @@ export default function TailgatePayday() {
   if(recovery) return <ResetPasswordPage onDone={()=>setRecovery(false)} onCancel={()=>{setRecovery(false);signOut();}}/>;
   if(!session) return <LoginPage/>;
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#64748b',fontSize:'14px'}}>Loading…</div>;
-  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} groups={groups} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess}/>;
+  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} groups={groups} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess} onSetMyPhone={setEmployeePhone}/>;
 
   const TABS=[['employees','Employees',Users],['orgs','Organizations',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['groups','Groups',Users],['discounts','Discounts',MapPin],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
 
@@ -3198,7 +3230,7 @@ export default function TailgatePayday() {
         </div>
       </div>
 
-      {tab==='employees'&&<EmployeesView employees={employees} deals={deals} assignments={assignments} signups={signups} onAdd={()=>setModal({type:'addEmp'})} onAddRequest={email=>setModal({type:'addEmp',data:{email}})} onDismissRequest={dismissSignup} onDelete={deleteEmployee}/>}
+      {tab==='employees'&&<EmployeesView employees={employees} deals={deals} assignments={assignments} signups={signups} onAdd={()=>setModal({type:'addEmp'})} onAddRequest={email=>setModal({type:'addEmp',data:{email}})} onDismissRequest={dismissSignup} onDelete={deleteEmployee} onSetPhone={setEmployeePhone}/>}
       {tab==='orgs'&&<OrgsView orgs={orgs} onAdd={()=>setModal({type:'addOrg'})} onDelete={deleteOrg}/>}
       {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onImportCSV={()=>setModal({type:'importCSV'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
       {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
