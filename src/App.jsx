@@ -188,7 +188,9 @@ function LoginPage() {
       const {error} = await supabase.auth.signInWithPassword({email,password});
       if (error) setError(error.message);
     } else {
-      const {error} = await supabase.auth.signUp({email,password});
+      // Send the confirmation link back to wherever the user actually signed up (prod or dev),
+      // not the project's default Site URL. The origin must be in Supabase's allowed Redirect URLs.
+      const {error} = await supabase.auth.signUp({email,password,options:{emailRedirectTo:window.location.origin}});
       if (error) setError(error.message);
       else setSuccess('Account created! If the app doesn’t open yet, your admin still needs to add you — they’ll see your request and set you up.');
     }
