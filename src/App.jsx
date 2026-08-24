@@ -2440,10 +2440,11 @@ const leadCity  = c => { const ci=(c.addresses?.[0]?.city||'').trim(); if(ci) re
 
 const leadGroup = (c,by) => by==='city'?leadCity(c):by==='school'?(c.school||'No school/org'):by==='group'?(c.group||'No group'):leadState(c);
 
-function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImport, onMarkTouch, onSetValue, onEditGroup, onCallAgain }) {
+function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImport, onMarkTouch, onSetValue, onEditGroup, onCallAgain, onEdit }) {
   const [areaCaller,setAreaCaller]=useState('all');
   const [groupBy,setGroupBy]=useState('group');
   const [openState,setOpenState]=useState('');
+  const [search,setSearch]=useState('');
   // Awaiting verification = a completed call with proof (a recording OR a signed e-agreement) not yet approved.
   const pending=calls.filter(c=>(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&(c.submittedTake!=null||c.recordingPath||c.agreementId)&&(!c.verifyStatus||c.verifyStatus==='pending'));
   const followUps=calls.filter(c=>c.status==='send_info');
@@ -2455,10 +2456,14 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
     return {cid, name:nameOf(cid), total:list.length, called:list.filter(leadContacted).length, done:list.filter(leadDone).length};
   }).filter(s=>s.total>0).sort((a,b)=>b.total-a.total);
 
-  const areaCalls=areaCaller==='all'?calls:calls.filter(c=>leadAssignedTo(c,areaCaller));
+  // Free-text search across the whole lead list (business, contact, phone, email, city, group).
+  const q=search.trim().toLowerCase();
+  const matchLead=c=>!q||[c.business,c.contact,c.phone,c.email,leadCity(c),c.group,c.location].some(v=>(v||'').toLowerCase().includes(q));
+  const areaCalls=(areaCaller==='all'?calls:calls.filter(c=>leadAssignedTo(c,areaCaller))).filter(matchLead);
   const groupMap={};
   areaCalls.forEach(c=>{ const k=leadGroup(c,groupBy); (groupMap[k]=groupMap[k]||[]).push(c); });
   const areas=Object.entries(groupMap).map(([state,list])=>({state,total:list.length,called:list.filter(leadContacted).length,list})).sort((a,b)=>b.total-a.total);
+  const matchCount=q?areaCalls.length:0;
 
   return (
     <div>
@@ -2534,10 +2539,14 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
             </select>
           </div>
         </div>
+        <div style={{padding:'10px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+          <input style={{...INP,fontSize:'13px'}} placeholder="Search all leads — business, contact, phone, email, city…" value={search} onChange={e=>setSearch(e.target.value)}/>
+          {q&&<div style={{fontSize:'12px',color:'#64748b',marginTop:'6px'}}>{matchCount} match{matchCount===1?'':'es'} across {areas.length} {groupBy==='group'?'group':groupBy}{areas.length===1?'':'s'} · click any lead to edit it</div>}
+        </div>
         {areas.length===0?(
-          <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>No leads yet. Use “Import leads” or “Assign call” to add some.</div>
+          <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>{q?'No leads match your search.':'No leads yet. Use “Import leads” or “Assign call” to add some.'}</div>
         ):areas.map(a=>{
-          const pct=a.total?Math.round(a.called/a.total*100):0; const open=openState===a.state;
+          const pct=a.total?Math.round(a.called/a.total*100):0; const open=(openState===a.state)||!!q;
           const start=a.list.map(c=>(c.createdAt||'').split('T')[0]).filter(Boolean).sort()[0];
           const gDue=a.list.find(c=>c.groupDue)?.groupDue||(start?addDays(start,GROUP_DEADLINE_DAYS):null);
           const left=(groupBy==='group'&&gDue)?daysUntil(gDue):null;
@@ -2558,7 +2567,7 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
                 <Bar pct={pct} color={pct>=50?'#1D9E75':'#EF9F27'}/>
               </div>
               {open&&[...a.list].sort((x,y)=>leadCity(x).localeCompare(leadCity(y))||(x.business||'').localeCompare(y.business||'')).map(c=>(
-                <AdminCoverageLeadRow key={c.id} c={c} groupBy={groupBy} nameOf={nameOf} onSetValue={onSetValue} onDelete={onDelete} onCallAgain={onCallAgain}/>
+                <AdminCoverageLeadRow key={c.id} c={c} groupBy={groupBy} nameOf={nameOf} onSetValue={onSetValue} onDelete={onDelete} onCallAgain={onCallAgain} onEdit={onEdit}/>
               ))}
             </div>
           );
@@ -2569,31 +2578,33 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
 }
 
 // Admin coverage row — shows decline pattern (both ladders), reopen date, and a Call-again-now override.
-function AdminCoverageLeadRow({ c, groupBy, nameOf, onSetValue, onDelete, onCallAgain }) {
+function AdminCoverageLeadRow({ c, groupBy, nameOf, onSetValue, onDelete, onCallAgain, onEdit }) {
   const [open,setOpen]=useState(false);
   const st=CALL_STATUS[c.status]||CALL_STATUS.to_call;
   const gk=c.gatekeeperDeclineCount||0, ow=c.ownerDeclineCount||0;
   const hasDecline=gk>0||ow>0;
   const cooldownOver=declineCooldownOver(c);
   const history=c.declineHistory||[];
+  const stop=fn=>e=>{ e.stopPropagation(); fn(); };
   return (
     <div style={{borderTop:'0.5px solid var(--color-border-tertiary)',background:'var(--color-background-secondary)'}}>
-      <div style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'12px',alignItems:'center',padding:'10px 18px 10px 30px'}}>
-        <div style={{minWidth:0}} onClick={()=>hasDecline&&setOpen(o=>!o)}>
-          <div style={{fontSize:'13px',fontWeight:'500',cursor:hasDecline?'pointer':'default'}}>{c.business}{hasDecline&&(open?' ▾':' ▸')}</div>
+      <div onClick={()=>onEdit&&onEdit(c)} title="Click to edit this lead" style={{display:'grid',gridTemplateColumns:'1fr auto auto',gap:'12px',alignItems:'center',padding:'10px 18px 10px 30px',cursor:'pointer'}}>
+        <div style={{minWidth:0}}>
+          <div style={{fontSize:'13px',fontWeight:'500',display:'flex',alignItems:'center',gap:'6px'}}>{c.business||'(no name)'}<Pencil size={11} style={{color:'#94a3b8',flexShrink:0}}/></div>
           <div style={{fontSize:'11px',color:'#64748b'}}>{[groupBy!=='group'?c.group:null,leadCity(c),c.callerId?nameOf(c.callerId):(!leadClaimed(c)&&leadPool(c).length>1?`${leadPool(c).length} callers`:null)].filter(Boolean).join(' · ')}</div>
           {hasDecline&&<div style={{fontSize:'11px',color:cooldownOver?'#0F6E56':'#854F0B',marginTop:'2px',fontWeight:'500'}}>
             {c.permanentlyDeclined?'Owner said no — set aside 1 yr':cooldownOver?'Cooldown over — back in the queue':`Back on ${fmtDate(c.nextEligibleDate)}`}
             {` · gatekeeper ${gk} · owner ${ow}`}{c.lastDeclineLevel?` · last: ${DECLINE_LEVELS[c.lastDeclineLevel]||c.lastDeclineLevel}`:''}
+            {history.length>0&&<button onClick={stop(()=>setOpen(o=>!o))} style={{...BTN(false),padding:'1px 7px',fontSize:'10px',marginLeft:'8px'}}>{open?'Hide history':'History'}</button>}
           </div>}
         </div>
-        <div style={{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap',justifyContent:'flex-end'}}>
+        <div onClick={e=>e.stopPropagation()} style={{display:'flex',gap:'6px',alignItems:'center',flexWrap:'wrap',justifyContent:'flex-end'}}>
           {c.payout?.amount!=null?<Badge color="teal">{fmt$(c.payout.amount)} paid</Badge>:<span title="What this call pays the caller"><ValueSelect value={leadValue(c)||''} onChange={v=>onSetValue(c.id,v)}/></span>}
           {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:'#185FA5'}}>{callbackWhen(c)}</span>}
           {c.status==='not_interested'&&!cooldownOver&&<button style={{...BTN(false),padding:'4px 9px',fontSize:'11px'}} onClick={()=>onCallAgain(c.id)}><Phone size={11}/>Call again now</button>}
           <Badge color={st.color}>{st.label}</Badge>
         </div>
-        <button onClick={()=>onDelete(c.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
+        <button onClick={stop(()=>onDelete(c.id))} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
       </div>
       {open&&history.length>0&&(
         <div style={{padding:'0 18px 12px 30px'}}>
@@ -2608,6 +2619,49 @@ function AdminCoverageLeadRow({ c, groupBy, nameOf, onSetValue, onDelete, onCall
         </div>
       )}
     </div>
+  );
+}
+
+// Super-admin: click a lead to edit its details, group, callers, payout, and notes.
+function EditLeadModal({ employees, groupNames=[], call, onSave, onDelete, onClose }) {
+  const [business,setBusiness]=useState(call.business||'');
+  const [contact,setContact]=useState(call.contact||'');
+  const [phone,setPhone]=useState(call.phone||'');
+  const [email,setEmail]=useState(call.email||'');
+  const [group,setGroup]=useState(call.group||'');
+  const [location,setLocation]=useState(call.location||'');
+  const [value,setValue]=useState(call.value||0);
+  const [notes,setNotes]=useState(call.notes||'');
+  const [callerIds,setCallerIds]=useState(leadPool(call));
+  const claimer=leadClaimed(call)?call.callerId:null;
+  const willRelease=claimer && !callerIds.includes(claimer) && !leadDone(call) && call.verifyStatus!=='approved';
+  const save=()=>onSave(call.id,{business:business.trim(),contact:contact.trim(),phone:phone.trim(),email:email.trim(),group:group.trim(),location:location.trim(),value,notes,callerIds});
+  return (
+    <ModalWrap title={`Edit lead — ${call.business||'lead'}`} onClose={onClose} wide>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+        <Field label="Business name"><input style={INP} value={business} onChange={e=>setBusiness(e.target.value)} autoFocus/></Field>
+        <Field label="Contact name"><input style={INP} value={contact} onChange={e=>setContact(e.target.value)}/></Field>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+        <Field label="Phone"><input style={INP} value={phone} onChange={e=>setPhone(e.target.value)} placeholder="(555) 000-0000"/></Field>
+        <Field label="Email"><input style={INP} value={email} onChange={e=>setEmail(e.target.value)}/></Field>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+        <Field label="Group / organization"><input style={INP} value={group} onChange={e=>setGroup(e.target.value)} list="tg-editlead-groups" placeholder="e.g. South Carolina IFC"/><datalist id="tg-editlead-groups">{groupNames.map(n=><option key={n} value={n}/>)}</datalist></Field>
+        <Field label="Location(s)"><input style={INP} value={location} onChange={e=>setLocation(e.target.value)} placeholder="e.g. Downtown & Eastside"/></Field>
+      </div>
+      <MultiEmpPicker employees={employees} value={callerIds} onChange={setCallerIds} label="Who can call this lead — tap to add or remove"/>
+      {willRelease&&<div style={{fontSize:'12px',color:'#0F6E56',marginTop:'-6px',marginBottom:'10px'}}>This lead was being worked by a caller you removed — it’ll go to the new caller(s) as a fresh “to call.”</div>}
+      <Field label={`What this call pays the caller${value?` — $${value}`:''}`}><ValuePicker value={value} onChange={setValue}/></Field>
+      <Field label="Notes"><textarea style={{...INP,minHeight:'70px',resize:'vertical'}} value={notes} onChange={e=>setNotes(e.target.value)}/></Field>
+      <div style={{display:'flex',justifyContent:'space-between',gap:'8px',marginTop:'6px'}}>
+        <button style={{...BTN(false),color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}} onClick={()=>onDelete(call.id)}><Trash2 size={13}/>Delete lead</button>
+        <div style={{display:'flex',gap:'8px'}}>
+          <button style={BTN(false)} onClick={onClose}>Cancel</button>
+          <button style={{...BTN(true),opacity:business.trim()?1:0.5}} disabled={!business.trim()} onClick={save}>Save changes</button>
+        </div>
+      </div>
+    </ModalWrap>
   );
 }
 
@@ -3049,6 +3103,16 @@ export default function TailgatePayday() {
     }));
     setModal(null);
   };
+  // Super-admin single-lead edit. If the caller pool changes and the lead's claimer is dropped,
+  // release a still-pending lead to the new pool as a fresh "to call" (same rule as group reassign).
+  const saveLeadEdit=(id,patch)=>{
+    patchCall(id,prev=>{
+      const p={...patch};
+      if(patch.callerIds && prev.callerId && !patch.callerIds.includes(prev.callerId) && !leadDone(prev) && prev.verifyStatus!=='approved'){ p.callerId=null; p.status='to_call'; }
+      return p;
+    });
+    setModal(null);
+  };
   // Every recorded take is persisted immediately so a redo can never lose the original
   const addRecordingTake=(id,take)=>patchCall(id,prev=>({recordings:[...(prev.recordings||[]),take]}));
   const rejectCall=id=>setC(calls.map(c=>c.id===id?{...c,verifyStatus:'rejected'}:c));
@@ -3139,7 +3203,7 @@ export default function TailgatePayday() {
       {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onImportCSV={()=>setModal({type:'importCSV'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
       {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
       {tab==='payroll'&&<PayrollView employees={employees} deals={deals} assignments={assignments}/>}
-      {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})} onEditGroup={(groupKey,data)=>setModal({type:'editGroup',data:{groupKey,...data}})} onCallAgain={callAgainNow}/>}
+      {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})} onEditGroup={(groupKey,data)=>setModal({type:'editGroup',data:{groupKey,...data}})} onCallAgain={callAgainNow} onEdit={c=>setModal({type:'editLead',data:c})}/>}
       {tab==='groups'&&<AdminGroupsView groups={groups} calls={calls} onAdd={()=>setModal({type:'groupMeta'})} onEdit={g=>setModal({type:'groupMeta',data:g})} onDelete={deleteGroupMeta}/>}
       {tab==='discounts'&&<AdminDiscountsView employees={employees} calls={calls}/>}
 
@@ -3152,6 +3216,7 @@ export default function TailgatePayday() {
       {modal?.type==='importLeads'&&<LeadImportModal employees={employees} existing={calls} groups={groups} onImport={addLeads} onClose={()=>setModal(null)}/>}
       {modal?.type==='editGroup'&&<GroupEditModal employees={employees} group={modal.data} onSave={updateGroup} onClose={()=>setModal(null)}/>}
       {modal?.type==='groupMeta'&&<GroupMetaModal group={modal.data} onSave={saveGroupMeta} onClose={()=>setModal(null)}/>}
+      {modal?.type==='editLead'&&<EditLeadModal employees={employees} groupNames={[...new Set([...groups.map(g=>g.name),...calls.map(c=>c.group)].map(s=>(s||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b))} call={modal.data} onSave={saveLeadEdit} onDelete={id=>{deleteCall(id);setModal(null);}} onClose={()=>setModal(null)}/>}
     </div>
   );
 }
