@@ -1038,7 +1038,28 @@ const declineTriedBy = c => new Set((c?.declineHistory||[]).map(h=>h.callerId).f
 const effectiveStatus = c => declineCooldownOver(c) ? 'to_call' : c?.status;
 // Callback timing display (Phase 1.2): date + availability window (falls back to legacy HH:MM)
 const AVAIL_LABEL = { morning:'Morning', afternoon:'Afternoon', evening:'Evening', anytime:'Anytime' };
-const callbackWhen = c => `${fmtDate(c.callbackDate)}${c.availability?` · ${AVAIL_LABEL[c.availability]||c.availability}`:(c.callbackTime?` · ${c.callbackTime}`:'')}`;
+// Hour-by-hour callback slots (caller picks any number, or none).
+const CALLBACK_SLOTS = ['07:00','08:00','09:00','10:00','11:00','12:00','13:00','14:00','15:00','16:00','17:00','18:00','19:00','20:00'];
+const slotLabel = t => { const [h]=(t||'').split(':').map(Number); if(Number.isNaN(h)) return t; const ap=h<12?'AM':'PM'; return `${h%12||12} ${ap}`; };
+const callbackWhen = c => {
+  const slots=Array.isArray(c.availSlots)&&c.availSlots.length ? c.availSlots.map(slotLabel).join(', ')
+    : (c.availability&&c.availability!=='anytime' ? (AVAIL_LABEL[c.availability]||c.availability) : (c.callbackTime||''));
+  return `${fmtDate(c.callbackDate)}${slots?` · ${slots}`:''}`;
+};
+// Estimated best window to reach a manager, by business type (when they open + when a GM tends to be in).
+const GM_WINDOW = {
+  'Fast food':{slots:['09:00','10:00','14:00','15:00'],note:'Managers are usually in mid-morning and mid-afternoon, between rushes.'},
+  'Pizza':{slots:['10:00','11:00','14:00','15:00'],note:'Late morning or between lunch and dinner is your best shot.'},
+  'Casual dining':{slots:['10:00','11:00','14:00','15:00'],note:'GMs open the store mid-morning; it’s quiet again 2–4 PM.'},
+  'Bakery/coffee shop':{slots:['07:00','08:00','09:00'],note:'Owners are in early — catch them before the morning rush.'},
+  'Healthy':{slots:['10:00','11:00','14:00','15:00'],note:'Try mid-morning or the afternoon lull.'},
+  'Ethnic':{slots:['10:00','11:00','14:00','15:00'],note:'Late morning or mid-afternoon, between services.'},
+  'International':{slots:['10:00','11:00','14:00','15:00'],note:'Late morning or mid-afternoon, between services.'},
+  'Food truck':{slots:['10:00','11:00'],note:'Reach them during prep, before the lunch window.'},
+  'High-end':{slots:['14:00','15:00','16:00'],note:'Dinner-focused — the GM is usually in mid-afternoon before service.'},
+  'Nightlife':{slots:['15:00','16:00','17:00'],note:'Afternoon, before they open for the night.'},
+};
+const gmWindow = type => GM_WINDOW[type] || {slots:['10:00','11:00','14:00','15:00'],note:'Managers are most reachable mid-morning and mid-afternoon, between rushes.'};
 // Filesystem-safe slug for organizing recordings in the storage bucket
 const slug = s => (s||'').toString().toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40) || 'x';
 const REC_MAX_SEC = 15 * 60;        // auto-stop recordings at 15 minutes
@@ -1323,7 +1344,8 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
   const [addresses,setAddresses]=useState(call.addresses?.length?call.addresses:[{street:call.location||'',city:'',state:''}]);
   const [offerDetails,setOfferDetails]=useState(call.offerDetails||'');
   const [cbDate,setCbDate]=useState(call.callbackDate||addDays(today(),1));
-  const [availability,setAvailability]=useState(call.availability||'anytime');
+  const [availSlots,setAvailSlots]=useState(Array.isArray(call.availSlots)?call.availSlots:[]);
+  const toggleSlot=t=>setAvailSlots(s=>s.includes(t)?s.filter(x=>x!==t):[...s,t].sort());
   const [declineLevel,setDeclineLevel]=useState(null); // 'owner' | 'gatekeeper' | 'unsure' — required before saving not_interested
   const [ownerPhone,setOwnerPhone]=useState(call.ownerPhone||''); // owner's personal cell, kept separate from the business line
   const [note,setNote]=useState('');
@@ -1450,10 +1472,10 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     } else if(outcome==='needs_info'){
       // Needs info doesn't park the lead — it goes back in the pool as a callback for tomorrow,
       // flagged that we already sent the info email, so it resurfaces in "follow up" a day later.
-      commit({ status:'callback', callbackDate:addDays(today(),1), availability:'anytime', callbackTime:'',
+      commit({ status:'callback', callbackDate:addDays(today(),1), availSlots:[], availability:'', callbackTime:'',
         infoSent:true, infoSentAt:new Date().toISOString(), ...(emailed?{infoEmailedAt:new Date().toISOString()}:{}), ...details });
     } else if(outcome==='callback'){
-      commit({ status:'callback', callbackDate:cbDate, availability, callbackTime:'', spokeTo, email, phone, ownerPhone:ownerPhone.trim(), decisionMaker:dm });
+      commit({ status:'callback', callbackDate:cbDate, availSlots, availability:'', callbackTime:'', spokeTo, email, phone, ownerPhone:ownerPhone.trim(), decisionMaker:dm });
     } else if(outcome==='no_answer'){
       commit({ status:'no_answer', ...(spokeTo?{spokeTo}:{}) });
     } else if(outcome==='not_interested'){
@@ -1646,13 +1668,22 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
           <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'12px'}} onClick={save}>Save &amp; follow up tomorrow</button>
         </div>
       )}
-      {outcome==='callback'&&(
+      {outcome==='callback'&&(()=>{
+        const gm=gmWindow(businessType||call.businessType||call.category);
+        return (
         <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
-          <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'6px',fontWeight:'500'}}>When are they available?</label>
-          <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'14px'}}>
-            {[['morning','Morning'],['afternoon','Afternoon'],['evening','Evening'],['anytime','Anytime']].map(([v,l])=>(
-              <button key={v} onClick={()=>setAvailability(v)} style={{...BTN(availability===v),flex:'1 1 90px',justifyContent:'center'}}>{l}</button>
-            ))}
+          <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'6px',fontWeight:'500'}}>What times work for them? <span style={{color:'#94a3b8',fontWeight:'400'}}>Tap any that apply — or none</span></label>
+          <div style={{display:'flex',gap:'6px',flexWrap:'wrap',marginBottom:'10px'}}>
+            {CALLBACK_SLOTS.map(t=>{ const on=availSlots.includes(t); const rec=gm.slots.includes(t);
+              return <button key={t} onClick={()=>toggleSlot(t)} title={rec?'Likely a good time to catch a manager':undefined} style={{...BTN(on),padding:'6px 11px',fontSize:'12px',position:'relative',...(rec&&!on?{borderColor:'#5DCAA5',color:'#0F6E56'}:{})}}>{slotLabel(t)}{rec?' ★':''}</button>;
+            })}
+          </div>
+          <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'var(--color-background-info)',border:'0.5px solid var(--color-border-info)',borderRadius:'var(--border-radius-md)',padding:'10px 12px',marginBottom:'14px'}}>
+            <Clock size={15} style={{color:'#185FA5',flexShrink:0,marginTop:'1px'}}/>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:'12px',color:'#0f172a',lineHeight:1.5}}><b>Best time to catch a manager{businessType||call.businessType||call.category?` at a ${(businessType||call.businessType||call.category).toLowerCase()}`:''}:</b> {gm.slots.map(slotLabel).join(', ')}. {gm.note}</div>
+              <button style={{...BTN(false),padding:'3px 9px',fontSize:'11px',marginTop:'7px'}} onClick={()=>setAvailSlots(s=>[...new Set([...s,...gm.slots])].sort())}><Plus size={11}/>Add these times</button>
+            </div>
           </div>
           <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'6px',fontWeight:'500'}}>When should we call them back?</label>
           <div style={{display:'flex',gap:'8px',flexWrap:'wrap',marginBottom:'8px'}}>
@@ -1669,7 +1700,8 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
           <NoteField note={note} setNote={setNote}/>
           <button style={{...BTN(true),width:'100%',justifyContent:'center'}} onClick={save}>Save callback</button>
         </div>
-      )}
+        );
+      })()}
       {outcome==='no_answer'&&(
         <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
           <div style={{fontSize:'13px',color:'#64748b',marginBottom:'12px'}}>Logs a no-answer — this lead stays in your rotation to try again.</div>
@@ -1822,7 +1854,7 @@ function CallerHome({ myCalls, onOpenLog, groupDefs=[] }) {
                 <Phone size={18} style={{flexShrink:0,color:'#854F0B'}}/>
                 <div style={{minWidth:0,flex:1}}>
                   <div style={{fontSize:'14px',fontWeight:'700',color:'#854F0B'}}>Follow up with {c.business||'this lead'} today</div>
-                  <div style={{fontSize:'12px',color:'#92722f',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{[(c.callbackDate||'')<t?'Was due '+fmtDate(c.callbackDate):'Due today', c.infoSent?'info email sent':null, c.availability?AVAIL_LABEL[c.availability]:null, lastNote].filter(Boolean).join(' · ')}</div>
+                  <div style={{fontSize:'12px',color:'#92722f',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{[(c.callbackDate||'')<t?'Was due '+fmtDate(c.callbackDate):'Due today', c.infoSent?'info email sent':null, (Array.isArray(c.availSlots)&&c.availSlots.length)?c.availSlots.map(slotLabel).join(', '):(c.availability&&c.availability!=='anytime'?AVAIL_LABEL[c.availability]:null), lastNote].filter(Boolean).join(' · ')}</div>
                 </div>
                 <ChevronRight size={16} style={{flexShrink:0,color:'#854F0B'}}/>
               </button>
