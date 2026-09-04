@@ -277,16 +277,24 @@ function ResetPasswordPage({ onDone, onCancel }) {
 }
 
 // ─── EMPLOYEE / CALLER PORTAL ─────────────────────────────────────
-function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess,onSetMyPhone}) {
+function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],timeclock=[],userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess,onSetMyPhone,onClockToggle}) {
   const [screen,setScreen]=useState('home');
   const [logId,setLogId]=useState('');
   const [phoneDraft,setPhoneDraft]=useState('');
   const [phoneDismissed,setPhoneDismissed]=useState(false); // session-only, so it nudges again next login
+  const [nowTs,setNowTs]=useState(()=>Date.now());
   const emp = employees.find(e=>e.email?.toLowerCase()===userEmail?.toLowerCase());
   const requested = useRef(false);
   useEffect(()=>{ // once: if a signed-in user isn't on the roster, flag it for the admin
     if(!emp && userEmail && onRequestAccess && !requested.current){ requested.current=true; onRequestAccess(userEmail); }
   });
+  // Tick the on-screen timer once a second while the caller is clocked in.
+  useEffect(()=>{
+    const open=(timeclock||[]).find(s=>s.employeeId===emp?.id&&!s.end);
+    if(!open) return;
+    const iv=setInterval(()=>setNowTs(Date.now()),1000);
+    return ()=>clearInterval(iv);
+  },[timeclock,emp]);
   if (!emp) return (
     <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:'20px',background:'#f1f5f9'}}>
       <div style={{...CARD,padding:'32px',textAlign:'center',maxWidth:'420px',background:'#ffffff'}}>
@@ -303,13 +311,34 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],userEm
   const logCall = myCalls.find(c=>c.id===logId); // derived fresh so recordings update live
   const TABS=[['home','My Leads',Building2],['crm','CRM',Users],['agreements','Agreements',FileText],['payouts','Payouts',DollarSign]];
 
+  // Time clock for this caller
+  const myShifts=(timeclock||[]).filter(s=>s.employeeId===emp.id);
+  const openShift=myShifts.find(s=>!s.end);
+  const t0=today();
+  const todayMs=myShifts.reduce((sum,s)=>{ if((s.start||'').split('T')[0]!==t0) return sum; const st=new Date(s.start).getTime(); const en=s.end?new Date(s.end).getTime():nowTs; return sum+Math.max(0,en-st); },0);
+  const fmtClock=ms=>{ const s=Math.max(0,Math.floor(ms/1000)); return `${Math.floor(s/3600)}:${String(Math.floor(s%3600/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; };
+  const todayHM=`${Math.floor(todayMs/3600000)}h ${Math.floor(todayMs%3600000/60000)}m`;
+
   return (
     <div style={{minHeight:'100vh',background:'#f1f5f9',padding:'20px'}}>
       <div style={{maxWidth:'1100px',margin:'0 auto'}}>
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'18px'}}>
-          <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
-            <div style={{width:'40px',height:'40px',borderRadius:'50%',background:'#E1F5EE',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:'600',color:'#0F6E56'}}>{initials(emp.name)}</div>
-            <div><div style={{fontWeight:'500',fontSize:'16px'}}>{emp.name}</div><div style={{fontSize:'12px',color:'#64748b'}}>Merchant caller portal</div></div>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'18px',gap:'12px',flexWrap:'wrap'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'14px'}}>
+            {onClockToggle&&(openShift?(
+              <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+                <div style={{display:'flex',alignItems:'center',gap:'7px',background:'#E1F5EE',border:'1px solid #5DCAA5',borderRadius:'100px',padding:'7px 13px'}}>
+                  <span style={{width:'8px',height:'8px',borderRadius:'50%',background:'#1D9E75',animation:'tgpulse 1.2s infinite'}}/>
+                  <span style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'700',color:'#0F6E56'}}>{fmtClock(nowTs-new Date(openShift.start).getTime())}</span>
+                </div>
+                <button style={{...BTN(false),padding:'8px 14px',color:'#A32D2D',borderColor:'#F09595',fontWeight:'600'}} onClick={()=>onClockToggle(emp.id)}>Clock Out</button>
+              </div>
+            ):(
+              <button onClick={()=>onClockToggle(emp.id)} style={{padding:'10px 20px',borderRadius:'var(--border-radius-md)',border:'none',cursor:'pointer',fontFamily:'var(--font-sans)',fontSize:'14px',fontWeight:'700',background:'#1D9E75',color:'#fff',display:'inline-flex',alignItems:'center',gap:'7px',boxShadow:'0 1px 3px rgba(29,158,117,0.4)'}}><Clock size={16}/>Clock In</button>
+            ))}
+            <div style={{display:'flex',alignItems:'center',gap:'10px'}}>
+              <div style={{width:'40px',height:'40px',borderRadius:'50%',background:'#E1F5EE',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'14px',fontWeight:'600',color:'#0F6E56'}}>{initials(emp.name)}</div>
+              <div><div style={{fontWeight:'500',fontSize:'16px'}}>{emp.name}</div><div style={{fontSize:'12px',color:'#64748b'}}>{onClockToggle?`Today: ${todayHM}${openShift?' · clocked in':''}`:'Merchant caller portal'}</div></div>
+            </div>
           </div>
           <button style={BTN(false)} onClick={onSignOut}><LogOut size={13}/>Sign out</button>
         </div>
@@ -2817,22 +2846,34 @@ function GroupEditModal({ employees, group, onSave, onClose }) {
 // ── Bulk lead import — drop a CSV, map its columns, assign the batch to a caller ──
 const LEAD_FIELDS = [
   ['business','Business name',true],
-  ['contact','Contact / decision maker',false],
-  ['phone','Phone',false],
-  ['email','Email',false],
-  ['street','Address',false],
   ['city','City',false],
   ['state','State',false],
+  ['email','Contact email',false],
+  ['street','Address',false],
+  ['contact','Contact name',false],
+  ['phone','Contact phone',false],
+  ['ownerPhone','Owner cell',false],
+  ['offer','Discount / offer text',false],
   ['category','Category / business type',false],
   ['school','School',false],
   ['value','Payout per call ($)',false],
   ['additionalInfo','Additional info',false],
   ['notes','Notes',false],
 ];
+// Auto-map columns by header name. Order matters — the negative lookaheads keep "Owner cell" out of
+// the plain phone/contact fields, and email out of the contact field.
 const LEAD_GUESS = {
-  business:/business|company|organi|name of|account/i, contact:/contact|owner|decision|\brep\b|first name|person|manager/i,
-  phone:/phone|tel|mobile|cell/i, email:/e-?mail/i, street:/address|street|addr/i, city:/city|town/i,
-  state:/state|region|province/i, category:/categor|type|industry|service|vertical/i, school:/school|institution|district|college|university/i,
+  business:/business|company|organi|name of|account/i,
+  city:/city|town/i,
+  state:/state|region|province/i,
+  email:/e-?mail/i,
+  street:/address|street|addr/i,
+  contact:/^(?!.*(phone|cell|mobile|e-?mail)).*(contact|decision|\brep\b|first ?name|person|manager)/i,
+  phone:/^(?!.*owner).*(phone|tel|mobile|cell)/i,
+  ownerPhone:/owner.*(phone|cell|mobile)|owner ?cell|personal.*(phone|cell|mobile)/i,
+  offer:/discount|offer|promo|deal text/i,
+  category:/categor|type|industry|service|vertical/i,
+  school:/school|institution|district|college|university/i,
   value:/payout|reward|worth|call value|per[- ]?call|price/i,
   additionalInfo:/additional|info|detail|specific/i, notes:/note|comment|remark/i,
 };
@@ -2889,9 +2930,9 @@ function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose 
     const addr={street:get(r,'street'),city:get(r,'city'),state:get(r,'state')};
     const hasAddr=addr.street||addr.city||addr.state;
     return {
-      business:get(r,'business'), contact:get(r,'contact'), phone:toE164(get(r,'phone')), email:get(r,'email'),
+      business:get(r,'business'), contact:get(r,'contact'), phone:toE164(get(r,'phone')), ownerPhone:toE164(get(r,'ownerPhone')), email:get(r,'email'),
       location:[addr.city,addr.state].filter(Boolean).join(', '), addresses:hasAddr?[addr]:[],
-      category:get(r,'category'), businessType:get(r,'category'), school:get(r,'school'),
+      category:get(r,'category'), businessType:get(r,'category'), school:get(r,'school'), offerDetails:get(r,'offer'),
       additionalInfo:get(r,'additionalInfo'), notes:get(r,'notes'), group:group.trim(),
       value:(map.value?parseMoney(get(r,'value')):0)||batchValue||0,
     };
@@ -3095,6 +3136,7 @@ export default function TailgatePayday() {
   const [assignments,setAssignments]=useState([]);
   const [orgs,setOrgs]=useState([]);
   const [groups,setGroups]=useState([]); // po_groups: {id,name,logoUrl,createdAt}
+  const [timeclock,setTimeclock]=useState([]); // po_timeclock: {id,employeeId,start,end}
   const [loading,setLoading]=useState(true);
   const [modal,setModal]=useState(null);
   const [calls,setCalls]=useState([]);
@@ -3114,10 +3156,10 @@ export default function TailgatePayday() {
   // Data load
   useEffect(()=>{
     if(!session) return;
-    Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn'),loadS('po_calls'),loadS('po_signups'),loadS('po_orgs'),loadS('po_groups')]).then(([e,d,a,c,s,o,g])=>{
+    Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn'),loadS('po_calls'),loadS('po_signups'),loadS('po_orgs'),loadS('po_groups'),loadS('po_timeclock')]).then(([e,d,a,c,s,o,g,tc])=>{
       const rawCalls=Array.isArray(c)?c:[]; const migratedCalls=migrateCalls(rawCalls);
       if(migratedCalls!==rawCalls) saveS('po_calls',migratedCalls); // persist the backfill once
-      setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setCalls(migratedCalls); setSignups(Array.isArray(s)?s:[]); setOrgs(Array.isArray(o)?o:[]); setGroups(Array.isArray(g)?g:[]); setLoading(false);
+      setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setCalls(migratedCalls); setSignups(Array.isArray(s)?s:[]); setOrgs(Array.isArray(o)?o:[]); setGroups(Array.isArray(g)?g:[]); setTimeclock(Array.isArray(tc)?tc:[]); setLoading(false);
     });
   },[session]);
 
@@ -3149,6 +3191,15 @@ export default function TailgatePayday() {
   const setSU=v=>{setSignups(v);saveS('po_signups',v);};
   const setO=v=>{setOrgs(v);saveS('po_orgs',v);};
   const setG=v=>{setGroups(v);saveS('po_groups',v);};
+  // Caller time clock — merge against the freshest server copy so two callers never clobber shifts.
+  const clockToggle=async empId=>{
+    const server=await loadS('po_timeclock');
+    const base=Array.isArray(server)?server:timeclock;
+    const open=base.find(s=>s.employeeId===empId&&!s.end);
+    const next=open ? base.map(s=>s===open?{...s,end:new Date().toISOString()}:s)
+                    : [...base,{id:genId(),employeeId:empId,start:new Date().toISOString(),end:null}];
+    setTimeclock(next); saveS('po_timeclock',next);
+  };
   // Super-admin Groups (Phase 3.2): persistent group definitions with logos. Renaming also
   // renames the group on every matching lead so logos + accumulation stay joined by name.
   const saveGroupMeta=g=>{
@@ -3272,7 +3323,7 @@ export default function TailgatePayday() {
   if(recovery) return <ResetPasswordPage onDone={()=>setRecovery(false)} onCancel={()=>{setRecovery(false);signOut();}}/>;
   if(!session) return <LoginPage/>;
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#64748b',fontSize:'14px'}}>Loading…</div>;
-  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} groups={groups} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess} onSetMyPhone={setEmployeePhone}/>;
+  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} groups={groups} timeclock={timeclock} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess} onSetMyPhone={setEmployeePhone} onClockToggle={clockToggle}/>;
 
   const TABS=[['employees','Employees',Users],['orgs','Organizations',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['groups','Groups',Users],['discounts','Discounts',MapPin],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
 
