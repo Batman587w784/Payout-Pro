@@ -307,7 +307,7 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],timecl
   );
 
   const myCalls = calls.filter(c=>leadVisibleTo(c,emp.id));
-  const queueCount = myCalls.filter(c=>{const s=effectiveStatus(c);return s==='to_call'||s==='callback'||s==='no_answer';}).length;
+  const queueCount = myCalls.filter(c=>{const s=effectiveStatus(c);return s==='follow_up'||s==='to_call'||s==='no_answer';}).length;
   const logCall = myCalls.find(c=>c.id===logId); // derived fresh so recordings update live
   const TABS=[['home','My Leads',Building2],['crm','CRM',Users],['agreements','Agreements',FileText],['payouts','Payouts',DollarSign]];
 
@@ -1037,6 +1037,7 @@ function PayStubModal({emp,period,onClose}) {
 const CALL_BUCKET = 'call-recordings';
 const CALL_STATUS = {
   to_call:        {label:'To call',        color:'gray'},
+  follow_up:      {label:'Follow up',      color:'amber'},
   completed:      {label:'Completed',      color:'teal'},
   needs_info:     {label:'Needs info',     color:'amber'},
   callback:       {label:'Callback',       color:'blue'},
@@ -1083,7 +1084,16 @@ const migrateCalls = list => {
   return changed?out:list;
 };
 const declineTriedBy = c => new Set((c?.declineHistory||[]).map(h=>h.callerId).filter(Boolean));
-const effectiveStatus = c => declineCooldownOver(c) ? 'to_call' : c?.status;
+// Effective (computed-on-read) status. Leads that were "blocked" surface for calling again:
+//  • a not-interested lead whose cooldown elapsed  → follow_up (reach out ASAP)
+//  • a real callback that's now due                 → follow_up
+//  • a "needs info" auto-callback that's now due     → to_call (reverts to the normal calling pool)
+const effectiveStatus = c => {
+  if(!c) return undefined;
+  if(declineCooldownOver(c)) return 'follow_up';
+  if(c.status==='callback' && (c.callbackDate||'')<=today()) return c.infoSent ? 'to_call' : 'follow_up';
+  return c.status;
+};
 // Callback timing display (Phase 1.2): date + availability window (falls back to legacy HH:MM)
 const AVAIL_LABEL = { morning:'Morning', afternoon:'Afternoon', evening:'Evening', anytime:'Anytime' };
 // Hour-by-hour callback slots (caller picks any number, or none).
@@ -1807,8 +1817,10 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
 const LEAD_BATCH = 10;
 // Shared lead row used by both My Leads sections
 function LeadRow({ c, onOpenLog }) {
-  const st=CALL_STATUS[effectiveStatus(c)]||CALL_STATUS.to_call; // a cooled-down decline reads as "To call", matching where it now sits
-  const overdue=c.status==='callback'&&c.callbackDate&&c.callbackDate<today();
+  const eff=effectiveStatus(c);
+  const st=CALL_STATUS[eff]||CALL_STATUS.to_call; // a due callback / cooled-down decline reads as "Follow up"
+  const showCb=(eff==='callback'||eff==='follow_up')&&c.status==='callback'&&c.callbackDate;
+  const overdue=showCb&&c.callbackDate<today();
   return (
     <div onClick={()=>onOpenLog(c)} role="button" tabIndex={0} style={{display:'grid',gridTemplateColumns:'34px 1fr auto auto',gap:'12px',alignItems:'center',padding:'12px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)',cursor:'pointer'}}>
       <div style={{width:'34px',height:'34px',borderRadius:'50%',background:'var(--color-background-info)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'11px',fontWeight:'600',color:'var(--color-text-info)'}}>{initials(c.contact||c.business||'?')}</div>
@@ -1819,7 +1831,7 @@ function LeadRow({ c, onOpenLog }) {
       <div style={{display:'flex',alignItems:'center',gap:'8px',flexWrap:'wrap',justifyContent:'flex-end'}}>
         {!leadClaimed(c)&&leadPool(c).length>1&&<Badge color="gray">{leadPool(c).length} can see</Badge>}
         {leadValue(c)>0&&<span style={{background:'#E1F5EE',border:'1px solid #5DCAA5',borderRadius:'100px',padding:'2px 10px',fontSize:'12px',fontWeight:'700',color:'#0F6E56',whiteSpace:'nowrap'}}>${leadValue(c)}</span>}
-        {c.status==='callback'&&c.callbackDate&&<span style={{fontSize:'11px',color:overdue?'#A32D2D':'#185FA5',fontWeight:'500'}}>{overdue?'Due ':''}{callbackWhen(c)}</span>}
+        {showCb&&<span style={{fontSize:'11px',color:overdue?'#A32D2D':'#185FA5',fontWeight:'500'}}>{overdue?'Due ':''}{callbackWhen(c)}</span>}
         {(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&c.verifyStatus&&<Badge color={VERIFY[c.verifyStatus].color}>{VERIFY[c.verifyStatus].label}</Badge>}
         <Badge color={st.color}>{st.label}</Badge>
       </div>
@@ -1856,36 +1868,39 @@ function GroupSection({ name, logoUrl, statsLeads, leads, onOpenLog }) {
 
 
 function CallerHome({ myCalls, onOpenLog, groupDefs=[] }) {
-  const t=today();
   const [showScript,setShowScript]=useState(false);
   const [area,setArea]=useState('all');
   const [groupF,setGroupF]=useState('all');
   const [sort,setSort]=useState('priority');
   const [search,setSearch]=useState('');
   const [shownU,setShownU]=useState(LEAD_BATCH);
+  const [shownF,setShownF]=useState(LEAD_BATCH);
   const order={callback:0,completed:1,interested:1,recorded:1,needs_info:2,no_answer:3,not_interested:4};
-  // "Up next" = never contacted, a callback that's due, OR a not-interested lead whose cooldown elapsed
-  const isUrgent=c=>effectiveStatus(c)==='to_call'||(c.status==='callback'&&(c.callbackDate||'')<=t);
-  const dueCallbacks=myCalls.filter(c=>c.status==='callback'&&(c.callbackDate||'')<=t)
-    .sort((a,b)=>(a.callbackDate||'').localeCompare(b.callbackDate||''));
+  // Follow up = a due callback or a not-interested lead whose cooldown elapsed → reach out ASAP.
+  // Up next = fresh "to call" (never contacted, or a needs-info lead that reverted after a day).
+  const isFollowUp=c=>effectiveStatus(c)==='follow_up';
+  const isToCall=c=>effectiveStatus(c)==='to_call';
   const states=[...new Set(myCalls.map(leadState))].sort();
   const groups=[...new Set(myCalls.map(c=>c.group).filter(Boolean))].sort();
   const q=search.trim().toLowerCase();
   const keep=c=>(area==='all'||leadState(c)===area)&&(groupF==='all'||c.group===groupF)&&(!q||[c.business,c.contact,c.phone,c.email,leadCity(c),c.group].some(v=>(v||'').toLowerCase().includes(q)));
+  const dueKey=c=>(declineCooldownOver(c)?c.nextEligibleDate:c.callbackDate)||'';
   const sortList=(list,isU)=>{
     if(sort==='pay') return [...list].sort((a,b)=>leadValue(b)-leadValue(a)||(a.business||'').localeCompare(b.business||''));
     if(sort==='area') return [...list].sort((a,b)=>leadState(a).localeCompare(leadState(b))||leadCity(a).localeCompare(leadCity(b)));
-    if(isU) return [...list].sort((a,b)=>{ const ac=a.status==='callback'?0:1,bc=b.status==='callback'?0:1; return (ac-bc)||((a.callbackDate||'').localeCompare(b.callbackDate||'')); });
+    if(isU) return [...list].sort((a,b)=>(dueKey(a)||'9').localeCompare(dueKey(b)||'9')||(a.business||'').localeCompare(b.business||''));
     return [...list].sort((a,b)=>((order[a.status]??9)-(order[b.status]??9))||((a.callbackDate||'').localeCompare(b.callbackDate||'')));
   };
-  const urgent=sortList(myCalls.filter(c=>keep(c)&&isUrgent(c)),true);
-  const rest=sortList(myCalls.filter(c=>keep(c)&&!isUrgent(c)),false);
+  const followUps=sortList(myCalls.filter(c=>keep(c)&&isFollowUp(c)),true);
+  const urgent=sortList(myCalls.filter(c=>keep(c)&&isToCall(c)),true);
+  const rest=sortList(myCalls.filter(c=>keep(c)&&!isFollowUp(c)&&!isToCall(c)),false);
   const counts={
-    to_call: myCalls.filter(c=>effectiveStatus(c)==='to_call').length,
-    callback: myCalls.filter(c=>c.status==='callback').length,
-    needs_info: myCalls.filter(c=>c.status==='needs_info').length,
+    follow_up: myCalls.filter(isFollowUp).length,
+    to_call: myCalls.filter(isToCall).length,
+    callback: myCalls.filter(c=>c.status==='callback'&&!isFollowUp(c)&&!isToCall(c)).length,
     completed: myCalls.filter(c=>c.status==='completed'||c.status==='interested'||c.status==='recorded').length,
   };
+  const fVis=followUps.slice(0,shownF), fRem=followUps.length-fVis.length;
   const uVis=urgent.slice(0,shownU), uRem=urgent.length-uVis.length;
   // Non-urgent leads grouped by their organization (Phase 2.3), stats from the caller's full set per group
   const groupKeyOf=c=>c.group||'Other';
@@ -1898,36 +1913,29 @@ function CallerHome({ myCalls, onOpenLog, groupDefs=[] }) {
   const selStyle={...INP,width:'auto',padding:'6px 9px',fontSize:'12px'};
   return (
     <div>
-      {dueCallbacks.length>0&&(
-        <div style={{display:'flex',flexDirection:'column',gap:'8px',marginBottom:'14px'}}>
-          {dueCallbacks.map(c=>{
-            const lastNote=(c.notes||'').split('\n').filter(Boolean).pop();
-            return (
-              <button key={c.id} onClick={()=>onOpenLog(c)} style={{display:'flex',alignItems:'center',gap:'11px',width:'100%',textAlign:'left',cursor:'pointer',background:'#FAEEDA',border:'1px solid #EF9F27',borderRadius:'var(--border-radius-lg)',padding:'13px 16px',fontFamily:'var(--font-sans)'}}>
-                <Phone size={18} style={{flexShrink:0,color:'#854F0B'}}/>
-                <div style={{minWidth:0,flex:1}}>
-                  <div style={{fontSize:'14px',fontWeight:'700',color:'#854F0B'}}>Follow up with {c.business||'this lead'} today</div>
-                  <div style={{fontSize:'12px',color:'#92722f',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{[(c.callbackDate||'')<t?'Was due '+fmtDate(c.callbackDate):'Due today', c.infoSent?'info email sent':null, (Array.isArray(c.availSlots)&&c.availSlots.length)?c.availSlots.map(slotLabel).join(', '):(c.availability&&c.availability!=='anytime'?AVAIL_LABEL[c.availability]:null), lastNote].filter(Boolean).join(' · ')}</div>
-                </div>
-                <ChevronRight size={16} style={{flexShrink:0,color:'#854F0B'}}/>
-              </button>
-            );
-          })}
+      {followUps.length>0&&(
+        <div style={{...CARD,marginBottom:'14px',border:'1.5px solid #EF9F27'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)',background:'#FAEEDA'}}>
+            <span style={{fontWeight:'700',fontSize:'14px',color:'#854F0B',display:'inline-flex',alignItems:'center',gap:'7px'}}><Phone size={15}/>Follow up — reach out ASAP</span>
+            <Badge color="amber">{followUps.length}</Badge>
+          </div>
+          {fVis.map(c=><LeadRow key={c.id} c={c} onOpenLog={onOpenLog}/>)}
+          {fRem>0&&<div style={{padding:'14px 18px',textAlign:'center'}}><button style={BTN(false)} onClick={()=>setShownF(s=>s+LEAD_BATCH)}>{fRem} more — Show {Math.min(LEAD_BATCH,fRem)}</button></div>}
         </div>
       )}
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',marginBottom:'14px'}}>
+        <Metric label="Follow up" value={counts.follow_up} color="#854F0B"/>
         <Metric label="To call" value={counts.to_call}/>
         <Metric label="Callbacks" value={counts.callback} color="#185FA5"/>
-        <Metric label="Needs info" value={counts.needs_info} color="#854F0B"/>
         <Metric label="Completed" value={counts.completed} color="#0F6E56"/>
       </div>
       <div style={{display:'flex',gap:'8px',alignItems:'center',flexWrap:'wrap',marginBottom:'14px'}}>
-        <input style={{...selStyle,flex:'1 1 180px',minWidth:'150px'}} placeholder="Search leads — name, contact, city…" value={search} onChange={e=>{setSearch(e.target.value);setShownU(LEAD_BATCH);}}/>
-        {groups.length>0&&<select style={selStyle} value={groupF} onChange={e=>{setGroupF(e.target.value);setShownU(LEAD_BATCH);}}>
+        <input style={{...selStyle,flex:'1 1 180px',minWidth:'150px'}} placeholder="Search leads — name, contact, city…" value={search} onChange={e=>{setSearch(e.target.value);setShownU(LEAD_BATCH);setShownF(LEAD_BATCH);}}/>
+        {groups.length>0&&<select style={selStyle} value={groupF} onChange={e=>{setGroupF(e.target.value);setShownU(LEAD_BATCH);setShownF(LEAD_BATCH);}}>
           <option value="all">All groups</option>
           {groups.map(g=><option key={g} value={g}>{g}</option>)}
         </select>}
-        <select style={selStyle} value={area} onChange={e=>{setArea(e.target.value);setShownU(LEAD_BATCH);}}>
+        <select style={selStyle} value={area} onChange={e=>{setArea(e.target.value);setShownU(LEAD_BATCH);setShownF(LEAD_BATCH);}}>
           <option value="all">All areas</option>
           {states.map(s=><option key={s} value={s}>{s}</option>)}
         </select>
@@ -1943,11 +1951,11 @@ function CallerHome({ myCalls, onOpenLog, groupDefs=[] }) {
 
       <div style={{...CARD,marginBottom:'14px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-          <span style={{fontWeight:'600',fontSize:'14px'}}>Up next — new leads & due callbacks</span>
-          {urgent.length>0&&<Badge color="amber">{urgent.length}</Badge>}
+          <span style={{fontWeight:'600',fontSize:'14px'}}>Up next — new leads to call</span>
+          {urgent.length>0&&<Badge color="gray">{urgent.length}</Badge>}
         </div>
         {urgent.length===0?(
-          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>You’re all caught up — nothing new or due right now.</div>
+          <div style={{padding:'32px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>No new leads to call right now.</div>
         ):uVis.map(c=><LeadRow key={c.id} c={c} onOpenLog={onOpenLog}/>)}
         {uRem>0&&(
           <div style={{padding:'14px 18px',textAlign:'center'}}>
@@ -1970,15 +1978,20 @@ function CallerHome({ myCalls, onOpenLog, groupDefs=[] }) {
 
 // ── CRM board — logged leads grouped into columns (ClickUp-style) ──
 const CRM_COLS = [
-  ['needs_info',    'Needs info',     'amber'],
+  ['follow_up',     'Follow up',      'amber'],
   ['completed',     'Completed',      'teal'],
   ['callback',      'Call back',      'blue'],
   ['no_answer',     'No answer',      'gray'],
   ['not_interested','Not interested', 'red'],
 ];
 function CallerCRM({ myCalls, onOpenLog, onWorkQueue }) {
-  const inCol=(c,key)=>key==='completed'?(c.status==='completed'||c.status==='interested'||c.status==='recorded'):c.status===key;
-  const uncontacted=myCalls.filter(c=>c.status==='to_call').length;
+  // Columns route by EFFECTIVE status, so a due callback / cooled-down decline lands in "Follow up",
+  // and the Callback / Not interested columns hold only the still-scheduled / still-in-cooldown ones.
+  const inCol=(c,key)=>{
+    if(key==='completed') return c.status==='completed'||c.status==='interested'||c.status==='recorded';
+    return effectiveStatus(c)===key;
+  };
+  const uncontacted=myCalls.filter(c=>effectiveStatus(c)==='to_call').length;
   return (
     <div>
       {uncontacted>0&&(
@@ -2706,7 +2719,8 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
 // Admin coverage row — shows decline pattern (both ladders), reopen date, and a Call-again-now override.
 function AdminCoverageLeadRow({ c, groupBy, nameOf, onSetValue, onDelete, onCallAgain, onEdit }) {
   const [open,setOpen]=useState(false);
-  const st=CALL_STATUS[c.status]||CALL_STATUS.to_call;
+  const st=CALL_STATUS[effectiveStatus(c)]||CALL_STATUS.to_call; // shows "Follow up" for due callbacks / cooled-down declines
+
   const gk=c.gatekeeperDeclineCount||0, ow=c.ownerDeclineCount||0;
   const hasDecline=gk>0||ow>0;
   const cooldownOver=declineCooldownOver(c);
