@@ -107,9 +107,14 @@ function getPayments(empId, deals, assignments) {
   });
   assignments.filter(a=>a.employeeId===empId).forEach(a => {
     a.periods.forEach(p => {
+      const es=p.entries||[];
+      const mdesc = es.length===1
+        ? `${es[0].business||'Merchant'}${(es[0].specifics||es[0].discountType)?` — ${es[0].specifics||es[0].discountType}`:' — discount'}`
+        : es.length>1
+          ? `Merchant discounts (${es.length}) — ${es.map(e=>e.business).filter(Boolean).slice(0,3).join(', ')}${es.length>3?'…':''}`
+          : `Merchant discounts — ${fmtDate(p.startDate)} → ${fmtDate(p.endDate)} (${p.discounts} deal${p.discounts!==1?'s':''})`;
       out.push({
-        id:`m-${p.id}`, date:p.endDate, type:'merchant',
-        desc:`Merchant discounts — ${fmtDate(p.startDate)} → ${fmtDate(p.endDate)} (${p.discounts} deal${p.discounts!==1?'s':''})`,
+        id:`m-${p.id}`, date:p.endDate, type:'merchant', desc:mdesc,
         amount:periodAmt(p),
         paid:p.paid, assignmentId:a.id, periodId:p.id
       });
@@ -778,11 +783,14 @@ function MerchantRepsView({employees,assignments,onAddPeriod,onImportCSV,onToggl
                     </div>
                     {a.periods.map(p=>{
                       const amt=periodAmt(p);
+                      const es=p.entries||[];
                       return (
-                        <div key={p.id} style={{display:'grid',gridTemplateColumns:'1.6fr 0.6fr 0.7fr 0.9fr auto',padding:'12px 18px',alignItems:'center',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+                        <div key={p.id} style={{borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+                        <div style={{display:'grid',gridTemplateColumns:'1.6fr 0.6fr 0.7fr 0.9fr auto',padding:'12px 18px',alignItems:'center'}}>
                           <div style={{fontSize:'13px'}}>
                             {fmtDate(p.startDate)} → {fmtDate(p.endDate)}
                             {p.source==='csv'&&<span style={{marginLeft:'6px'}}><Badge color="blue">CSV</Badge></span>}
+                            {p.source==='call'&&<span style={{marginLeft:'6px'}}><Badge color="teal">Call</Badge></span>}
                           </div>
                           <div style={{fontFamily:'var(--font-mono)',fontSize:'13px'}}>{p.discounts}</div>
                           <div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:'#0F6E56'}}>{fmt$(amt)}</div>
@@ -791,6 +799,17 @@ function MerchantRepsView({employees,assignments,onAddPeriod,onImportCSV,onToggl
                             <button onClick={()=>onPayStub(emp,p)} style={{...BTN(false),fontSize:'12px',padding:'5px 10px',color:'var(--color-text-info)',borderColor:'var(--color-border-info)'}}><FileText size={12}/>Stub</button>
                             <button onClick={()=>onDeletePeriod(a.id,p.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
                           </div>
+                        </div>
+                        {es.length>0&&(
+                          <div style={{padding:'0 18px 12px 18px'}}>
+                            {es.map((e,i)=>(
+                              <div key={i} style={{display:'flex',justifyContent:'space-between',gap:'10px',fontSize:'12px',color:'#0f172a',padding:'6px 12px',background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',marginTop:i?'4px':0}}>
+                                <span style={{minWidth:0}}><b>{e.business||'Merchant'}</b>{(e.specifics||e.discountType)?<span style={{color:'#64748b'}}> — {e.specifics||e.discountType}</span>:''}</span>
+                                {e.amount!=null&&<span style={{fontFamily:'var(--font-mono)',color:'#0F6E56',whiteSpace:'nowrap'}}>{fmt$(e.amount)}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        )}
                         </div>
                       );
                     })}
@@ -1383,6 +1402,8 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
   const hasRecording=!!submittedRec;
   // …and the caller must type what discount they actually secured before completing.
   const hasOffer=offerDetails.trim().length>0;
+  // …and we require the merchant's email so we can keep their info and send them the discounts later.
+  const hasEmail=/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test((email||'').trim());
 
   // Profile header bits + the rest of what we already know about this lead
   const leadAddress=(call.addresses?.map(addrLine).filter(Boolean).join(' • '))||call.location||'';
@@ -1456,7 +1477,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     finally{ setCreatingAgr(false); }
   };
   const saveFormCompleted=()=>{
-    if(!hasOffer) return; // discount details are required
+    if(!hasOffer||!hasEmail) return; // discount details + merchant email are required
     const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
     commit({ status:'completed', verifyStatus:'pending', agreementId, decisionMaker:dm, spokeTo, email, phone,
       business:businessName||call.business, businessType, category:businessType, addresses, location:loc||call.location||'', offerDetails });
@@ -1467,7 +1488,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     const details={ decisionMaker:dm, spokeTo, email, phone, ownerPhone:ownerPhone.trim(), business:businessName||call.business,
       businessType, category:businessType, addresses, location:loc||call.location||'', offerDetails };
     if(outcome==='completed'){
-      if(!hasRecording||!hasOffer) return; // both guarded by the disabled button too
+      if(!hasRecording||!hasOffer||!hasEmail) return; // recording + discount + email all required (guarded by the button too)
       commit({ status:'completed', verifyStatus:'pending', submittedTake, recordedAt:new Date().toISOString(), ...details });
     } else if(outcome==='needs_info'){
       // Needs info doesn't park the lead — it goes back in the pool as a callback for tomorrow,
@@ -1598,10 +1619,11 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
 
           {completeMode==='form'&&(formPhase==='details'?(
             <>
-              <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>Enter everything you have — it pre-fills the form so they just confirm it, not fill it out.</div>
+              <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>Enter everything you have — it pre-fills the form so they just confirm it, not fill it out. Their <b>email is required</b> so we can keep their info and send them their discounts.</div>
               {detailsForm}
-              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:creatingAgr||!hasOffer?0.5:1}} disabled={creatingAgr||!hasOffer} onClick={startForm}><FileText size={14}/>{creatingAgr?'Preparing…':'Continue — choose text or email'}</button>
+              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:creatingAgr||!hasOffer||!hasEmail?0.5:1}} disabled={creatingAgr||!hasOffer||!hasEmail} onClick={startForm}><FileText size={14}/>{creatingAgr?'Preparing…':'Continue — choose text or email'}</button>
               {!hasOffer&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'8px',fontWeight:'500'}}>Enter the discount details above before continuing.</div>}
+              {hasOffer&&!hasEmail&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'8px',fontWeight:'500'}}>Enter their email above before continuing.</div>}
               {agreementErr&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'10px'}}>{agreementErr}</div>}
             </>
           ):(
@@ -1615,12 +1637,14 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
 
           {completeMode==='verbal'&&(
             <>
+              <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'#E6F1FB',border:'0.5px solid #85B7EB',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#185FA5',marginBottom:'12px',fontWeight:'600',lineHeight:1.5}}><AlertTriangle size={16} style={{flexShrink:0,marginTop:'1px'}}/><span>Get their <b>email</b> before you submit — it’s required. That’s how we keep their info and send them their discounts going forward.</span></div>
               <div style={{display:'flex',alignItems:'flex-start',gap:'8px',background:'#FAEEDA',border:'0.5px solid #EF9F27',borderRadius:'var(--border-radius-md)',padding:'11px 13px',fontSize:'13px',color:'#854F0B',marginBottom:'14px',fontWeight:'500',lineHeight:1.5}}><Video size={16} style={{flexShrink:0,marginTop:'1px'}}/><span>Record yourself confirming the discount with them — a recording is <b>required</b> to mark this Completed. Scroll down, record, then tap “Use this recording — complete call.” Video is best, but audio-only works too.</span></div>
               <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'12px'}}>Confirm their details</div>
               {detailsForm}
               <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasRecording?'#0F6E56':'#A32D2D',margin:'0 0 6px',fontWeight:'500'}}>{hasRecording?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasRecording?'Recording attached — this goes to your admin to verify and pay.':'No recording yet — record one below (it completes the call automatically).'}</span></div>
-              <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasOffer?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasOffer?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasOffer?'Discount details entered.':'Enter the discount details above — required to complete.'}</span></div>
-              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasRecording&&hasOffer?1:0.5}} disabled={!hasRecording||!hasOffer} onClick={save}><CheckCircle size={14}/>Save completed</button>
+              <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasOffer?'#0F6E56':'#A32D2D',margin:'0 0 6px',fontWeight:'500'}}>{hasOffer?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasOffer?'Discount details entered.':'Enter the discount details above — required to complete.'}</span></div>
+              <div style={{display:'flex',alignItems:'center',gap:'6px',fontSize:'12px',color:hasEmail?'#0F6E56':'#A32D2D',margin:'0 0 10px',fontWeight:'500'}}>{hasEmail?<CheckCircle size={13}/>:<AlertTriangle size={13}/>}<span>{hasEmail?'Email captured.':'Enter their email above — required to submit.'}</span></div>
+              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:hasRecording&&hasOffer&&hasEmail?1:0.5}} disabled={!hasRecording||!hasOffer||!hasEmail} onClick={save}><CheckCircle size={14}/>Save completed</button>
             </>
           )}
         </div>
@@ -1741,7 +1765,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
         </div>
         <div>
           <CallRecorder call={call} callerName={callerName} submittedTake={submittedTake}
-            onTakeSaved={take=>onAddRecordingTake(call.id,take)} onUseTake={take=>setSubmittedTake(take.take)} onComplete={save} canComplete={hasOffer} completeHint="Enter the discount details above before completing."/>
+            onTakeSaved={take=>onAddRecordingTake(call.id,take)} onUseTake={take=>setSubmittedTake(take.take)} onComplete={save} canComplete={hasOffer&&hasEmail} completeHint={!hasOffer?'Enter the discount details above before completing.':'Enter their email above before completing.'}/>
           <div style={{fontSize:'12px',color:'#64748b',marginTop:'10px',lineHeight:1.5}}>Put the call on <b>speakerphone</b> near your computer so the recording captures both voices. Every take is saved — you can re-record and pick the good one.</div>
         </div>
       </div>
@@ -2387,6 +2411,16 @@ function AdminDiscountsView({ employees, calls }) {
   const filtered=!term?discounts:discounts.filter(c=>[c.business,area(c),nameOf(c.callerId),c.offerDetails,c.group].filter(Boolean).join(' ').toLowerCase().includes(term));
   const approvedCount=discounts.filter(c=>c.verifyStatus==='approved').length;
 
+  const contactPerson=c=>[c.decisionMaker?.title,c.decisionMaker?.firstName,c.decisionMaker?.lastName].filter(Boolean).join(' ')||c.contact||c.spokeTo||'';
+  const fullAddr=c=>(c.addresses?.map(a=>[a.street,a.city,a.state].filter(Boolean).join(', ')).filter(Boolean).join(' | '))||c.location||'';
+  const exportCSV=()=>{
+    const csvEsc=v=>{ const s=String(v==null?'':v); return /[",\n\r]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
+    const headers=['Business','Discount / offer','Contact person','Phone','Owner cell','Email','Address','City','State','Group','School','Caller','Date','Status','Payout ($)'];
+    const rows=filtered.map(c=>[c.business,c.offerDetails,contactPerson(c),c.phone,c.ownerPhone,c.email,fullAddr(c),leadCity(c),leadState(c),c.group,c.school,nameOf(c.callerId),dateOf(c),statusText(c),c.payout?.amount!=null?c.payout.amount:''].map(csvEsc).join(','));
+    const csv='﻿'+[headers.join(','),...rows].join('\r\n'); // BOM so Excel reads UTF-8
+    const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}); const url=URL.createObjectURL(blob);
+    const a=document.createElement('a'); a.href=url; a.download=`tailgate-discounts-${today()}.csv`; a.click(); URL.revokeObjectURL(url);
+  };
   const exportPDF=()=>{
     const esc=s=>String(s==null?'':s).replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
     const rows=filtered.map(c=>`<tr><td>${esc(c.business)}</td><td>${esc(area(c))}</td><td>${esc(c.offerDetails||'—')}</td><td>${esc(nameOf(c.callerId))}</td><td>${esc(dateOf(c)||'—')}</td><td>${esc(statusText(c))}</td></tr>`).join('');
@@ -2400,9 +2434,12 @@ function AdminDiscountsView({ employees, calls }) {
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px',gap:'10px',flexWrap:'wrap'}}>
         <div>
           <h3 style={{margin:0,fontSize:'16px',fontWeight:'500'}}>Guaranteed discounts</h3>
-          <div style={{fontSize:'13px',color:'#64748b',marginTop:'2px'}}>Every confirmed merchant discount and where it is — {approvedCount} approved · {discounts.length} total. Export to PDF or open any approved recording.</div>
+          <div style={{fontSize:'13px',color:'#64748b',marginTop:'2px'}}>Every confirmed merchant discount and where it is — {approvedCount} approved · {discounts.length} total. Export the full list (with contact info) or open any approved recording.</div>
         </div>
-        <button style={BTN(true)} onClick={exportPDF}><Download size={14}/>Export PDF</button>
+        <div style={{display:'flex',gap:'8px'}}>
+          <button style={BTN(true)} onClick={exportCSV}><Download size={14}/>Export CSV</button>
+          <button style={BTN(false)} onClick={exportPDF}><FileText size={14}/>PDF</button>
+        </div>
       </div>
       <div style={{...CARD,padding:'12px 14px',marginBottom:'14px'}}>
         <input style={INP} value={q} onChange={e=>setQ(e.target.value)} placeholder="Search discounts — business, area, caller, or offer…"/>
