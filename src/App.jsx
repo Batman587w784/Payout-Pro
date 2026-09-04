@@ -2444,7 +2444,7 @@ function AdminDiscountsView({ employees, calls }) {
   const fullAddr=c=>(c.addresses?.map(a=>[a.street,a.city,a.state].filter(Boolean).join(', ')).filter(Boolean).join(' | '))||c.location||'';
   const exportCSV=()=>{
     const csvEsc=v=>{ const s=String(v==null?'':v); return /[",\n\r]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
-    const headers=['Business','Discount / offer','Contact person','Phone','Owner cell','Email','Address','City','State','Group','School','Caller','Date','Status','Payout ($)'];
+    const headers=['Business','Discount text','Contact person','Phone','Owner cell','Email','Address','City','State','Group','School','Caller','Date','Status','Payout ($)'];
     const rows=filtered.map(c=>[c.business,c.offerDetails,contactPerson(c),c.phone,c.ownerPhone,c.email,fullAddr(c),leadCity(c),leadState(c),c.group,c.school,nameOf(c.callerId),dateOf(c),statusText(c),c.payout?.amount!=null?c.payout.amount:''].map(csvEsc).join(','));
     const csv='﻿'+[headers.join(','),...rows].join('\r\n'); // BOM so Excel reads UTF-8
     const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}); const url=URL.createObjectURL(blob);
@@ -2853,7 +2853,7 @@ const LEAD_FIELDS = [
   ['contact','Contact name',false],
   ['phone','Contact phone',false],
   ['ownerPhone','Owner cell',false],
-  ['offer','Discount / offer text',false],
+  ['offer','Discount text',false],
   ['category','Category / business type',false],
   ['school','School',false],
   ['value','Payout per call ($)',false],
@@ -2917,7 +2917,9 @@ function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose 
   const fileRef=useRef();
 
   const processFile=file=>{
-    Papa.parse(file,{header:true,skipEmptyLines:true,complete:res=>{
+    // transformHeader strips the UTF-8 BOM (added to our own CSV exports for Excel) and trims spacing,
+    // so a re-imported export maps cleanly by column name.
+    Papa.parse(file,{header:true,skipEmptyLines:true,transformHeader:h=>{let s=h||'';if(s.charCodeAt(0)===65279)s=s.slice(1);return s.trim();},complete:res=>{
       const hdrs=(res.meta.fields||[]).filter(Boolean);
       const used=new Set(); const m={};
       LEAD_FIELDS.forEach(([f])=>{ const hit=hdrs.find(h=>!used.has(h)&&LEAD_GUESS[f]&&LEAD_GUESS[f].test(h)); if(hit){m[f]=hit;used.add(hit);} else m[f]=''; });
@@ -3080,9 +3082,12 @@ function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose 
         <div style={{maxHeight:'220px',overflowY:'auto'}}>
           {validRows.slice(0,5).map((r,i)=>{const b=build(r);return (
             <div key={i} style={{padding:'8px 12px',borderTop:'0.5px solid var(--color-border-tertiary)',fontSize:'12px'}}>
-              <span style={{fontWeight:'500'}}>{b.business||'—'}</span>
-              {b.value>0&&<span style={{fontWeight:'700',color:'#0F6E56',marginLeft:'8px'}}>${b.value}</span>}
-              <span style={{color:'var(--color-text-secondary)'}}>{[b.contact,b.phone,b.email,[b.addresses[0]?.city,b.addresses[0]?.state].filter(Boolean).join(', ')].filter(Boolean).length?' — '+[b.contact,b.phone,b.email,[b.addresses[0]?.city,b.addresses[0]?.state].filter(Boolean).join(', ')].filter(Boolean).join(' · '):''}</span>
+              <div>
+                <span style={{fontWeight:'500'}}>{b.business||'—'}</span>
+                {b.value>0&&<span style={{fontWeight:'700',color:'#0F6E56',marginLeft:'8px'}}>${b.value}</span>}
+                <span style={{color:'var(--color-text-secondary)'}}>{[b.contact,b.phone,b.ownerPhone,b.email,[b.addresses[0]?.city,b.addresses[0]?.state].filter(Boolean).join(', ')].filter(Boolean).length?' — '+[b.contact,b.phone,b.ownerPhone,b.email,[b.addresses[0]?.city,b.addresses[0]?.state].filter(Boolean).join(', ')].filter(Boolean).join(' · '):''}</span>
+              </div>
+              {b.offerDetails&&<div style={{color:'#0F6E56',marginTop:'2px'}}>Discount: {b.offerDetails}</div>}
             </div>
           );})}
         </div>
