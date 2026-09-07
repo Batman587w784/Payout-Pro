@@ -25,7 +25,7 @@ const signupLink = (name,email) => `${SIGNUP_FORM_BASE}&recipient_name=${encodeU
 // AND syncs to Supabase in the background (for cross-device access)
 const loadS = async key => {
   try {
-    const { data } = await supabase.from('app_data').select('value').eq('key',key).single();
+    const { data } = await supabase.from('app_data').select('value').eq('key',key).maybeSingle();
     if (data) { localStorage.setItem(key, data.value); return JSON.parse(data.value); }
   } catch(e) {}
   try { const local = localStorage.getItem(key); return local ? JSON.parse(local) : []; } catch(e) { return []; }
@@ -2228,16 +2228,69 @@ function CallerPayouts({ emp, deals, assignments }) {
 }
 
 // ── Admin: open the merchant's info stamped onto the real agreement PDF (authenticated by JWT) ──
-function AgreementPdfButton({ agreementId, label='View filled agreement (PDF)' }) {
+// Standard contract copy, reproduced verbatim from the agreement template.
+const AGREEMENT_TERMS = `Thank you for supporting our local community through Tailgate Co. By submitting your discount, you authorize Tailgate Co. to feature your business name, logo, and offer on fundraising cards and related promotional materials (cards, social media, etc.). Tailgate may distribute this offer through schools, nonprofit organizations, corporate partners, independent campaigns, or directly to consumers through Tailgate's digital or physical platforms. Once printing begins, discounts cannot be changed or withdrawn for the remainder of the season.
+
+This initiative supports:
+  • Discounts for multiple groups within the community.
+  • No upfront payment is required from partnering businesses.
+  • Cards remain active for 12 months from each print date.
+
+You agree to honor the submitted discount, ensure your staff is aware and able to redeem it, and understand that your discount may appear on multiple cards until an updated discount is submitted through our website. Any changes you make will apply to the next print cycle. Discounts must be redeemed through the Tailgate mobile or web redemption page. Physical cards alone are not valid for redemption.
+
+Both NFC and traditional printed cards are valid and must be accepted by participating businesses.`;
+
+// Build the filled agreement entirely client-side from data the admin can already read (RLS),
+// so it never depends on the agreement-pdf Edge Function. Opens a clean, printable document.
+function AgreementPdfButton({ agreementId, label='View filled agreement' }) {
   const [loading,setLoading]=useState(false); const [err,setErr]=useState('');
   const open=async()=>{
     setLoading(true); setErr('');
     try{
-      const {data:{session}}=await supabase.auth.getSession();
-      const res=await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/agreement-pdf?agreementId=${encodeURIComponent(agreementId)}`,{headers:{apikey:import.meta.env.VITE_SUPABASE_ANON_KEY,Authorization:`Bearer ${session?.access_token}`}});
-      if(!res.ok){ let e='HTTP '+res.status; try{ e=(await res.json()).error||e; }catch{/* keep */} throw new Error(e); }
-      const blob=await res.blob(); window.open(URL.createObjectURL(blob),'_blank');
-    }catch(e){ setErr('Could not open the filled agreement ('+(e.message||e)+'). If it keeps failing, redeploy the agreement-pdf function.'); }
+      const {data,error}=await supabase.from('agreements')
+        .select('id,status,prefill,rep_name,rep_signed_at,signatures(signer_name,signer_title,submitted_fields,signature_value,signed_at)')
+        .eq('id',agreementId).maybeSingle();
+      if(error) throw error;
+      if(!data) throw new Error('Agreement not found');
+      const sig=Array.isArray(data.signatures)?data.signatures[0]:data.signatures;
+      const f={...(data.prefill||{}),...(sig?.submitted_fields||{})};
+      const esc=s=>String(s==null?'':s).replace(/[&<>]/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[ch]));
+      const row=(l,v)=>`<tr><td class="l">${esc(l)}</td><td class="v">${(String(v||'').trim())?esc(v):'<span class="bk">—</span>'}</td></tr>`;
+      const signed=data.status==='signed'&&sig;
+      const signDate=sig?.signed_at?new Date(sig.signed_at).toLocaleString():'';
+      const html=`<!doctype html><html><head><meta charset="utf-8"><title>Discount Card Partnership Agreement — ${esc(f.business_name||'')}</title>
+<style>*{box-sizing:border-box}body{font-family:Georgia,'Times New Roman',serif;color:#1a1d24;max-width:720px;margin:0 auto;padding:40px 44px;line-height:1.5}
+h1{font-size:22px;color:#101f6b;margin:0 0 2px}.ey{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#6b7280;font-family:Arial,sans-serif}
+table{width:100%;border-collapse:collapse;margin:18px 0}td{padding:8px 6px;border-bottom:1px solid #e2e8f0;vertical-align:top;font-size:14px}
+td.l{width:170px;color:#6b7280;font-family:Arial,sans-serif;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+.bk{color:#b91c1c}.terms{white-space:pre-wrap;font-size:13px;color:#374151;border-top:2px solid #101f6b;padding-top:14px;margin-top:8px}
+.sig{margin-top:26px;display:flex;gap:40px;flex-wrap:wrap}.sig .b{flex:1;min-width:220px}.nm{font-size:18px;color:#101f6b;border-bottom:1px solid #94a3b8;padding-bottom:3px;min-height:26px;font-family:'Segoe Script','Brush Script MT',cursive}
+.cap{font-size:11px;color:#6b7280;font-family:Arial,sans-serif;margin-top:4px}.audit{margin-top:22px;font-size:11px;color:#9ca3af;font-family:Arial,sans-serif;border-top:1px solid #eee;padding-top:10px}
+.status{display:inline-block;font-family:Arial,sans-serif;font-size:11px;font-weight:700;padding:3px 10px;border-radius:100px;margin-left:8px;vertical-align:middle}
+.print{position:fixed;top:16px;right:16px;font-family:Arial,sans-serif;font-size:13px;background:#101f6b;color:#fff;border:none;border-radius:8px;padding:9px 16px;cursor:pointer}
+@media print{.print{display:none}}</style></head><body>
+<button class="print" onclick="window.print()">Print / Save as PDF</button>
+<div class="ey">Tailgate Co.</div>
+<h1>Discount Card Partnership Agreement${signed?'<span class="status" style="background:#E1F5EE;color:#0F6E56">SIGNED</span>':'<span class="status" style="background:#FAEEDA;color:#854F0B">NOT SIGNED</span>'}</h1>
+<table>
+${row('Business name',f.business_name)}
+${row('Contact person',f.contact_person)}
+${f.contact_title?row('Title',f.contact_title):''}
+${row('Phone',f.phone)}
+${row('Email',f.email)}
+${row('Address',f.address)}
+${row('Discount offered',f.discount_offered)}
+</table>
+<div class="terms">${esc(AGREEMENT_TERMS)}</div>
+<div class="sig">
+  <div class="b"><div class="nm">${esc(sig?.signature_value||sig?.signer_name||'')}</div><div class="cap">Partner signature${sig?.signer_title?` — ${esc(sig.signer_title)}`:''}${sig?.signed_at?` · ${esc(new Date(sig.signed_at).toLocaleDateString())}`:''}</div></div>
+  <div class="b"><div class="nm">${esc(data.rep_name||'')}</div><div class="cap">Tailgate representative${data.rep_signed_at?` · ${esc(new Date(data.rep_signed_at).toLocaleDateString())}`:''}</div></div>
+</div>
+${signed?`<div class="audit">Signed electronically${signDate?` on ${esc(signDate)}`:''}. This record is generated from Tailgate's signed agreement data.</div>`:'<div class="audit">This agreement has not been signed yet.</div>'}
+</body></html>`;
+      const w=window.open('','_blank'); if(!w){ setErr('Please allow pop-ups to open the agreement.'); return; }
+      w.document.write(html); w.document.close(); w.focus();
+    }catch(e){ setErr('Could not open the agreement ('+(e.message||e)+').'); }
     finally{ setLoading(false); }
   };
   return (<>
