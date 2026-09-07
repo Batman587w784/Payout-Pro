@@ -2455,10 +2455,19 @@ function AdminDiscountsView({ employees, calls }) {
 
   const contactPerson=c=>[c.decisionMaker?.title,c.decisionMaker?.firstName,c.decisionMaker?.lastName].filter(Boolean).join(' ')||c.contact||c.spokeTo||'';
   const fullAddr=c=>(c.addresses?.map(a=>[a.street,a.city,a.state].filter(Boolean).join(', ')).filter(Boolean).join(' | '))||c.location||'';
+  // One catch-all "Notes" column: the caller's notes + additional info, plus a summary of the key details.
+  const notesBlob=c=>{
+    const parts=[];
+    if(c.notes) parts.push(String(c.notes).replace(/\s*\n\s*/g,' ').trim());
+    if(c.additionalInfo) parts.push(String(c.additionalInfo).replace(/\s*\n\s*/g,' ').trim());
+    const meta=[c.ownerPhone?`Owner cell: ${c.ownerPhone}`:'',`Caller: ${nameOf(c.callerId)}`,c.school?`School: ${c.school}`:'',dateOf(c)?`Date: ${dateOf(c)}`:'',`Status: ${statusText(c)}`].filter(Boolean).join(' · ');
+    if(meta) parts.push(meta);
+    return parts.join(' — ');
+  };
   const exportCSV=()=>{
     const csvEsc=v=>{ const s=String(v==null?'':v); return /[",\n\r]/.test(s)?`"${s.replace(/"/g,'""')}"`:s; };
-    const headers=['Business','Discount text','Contact person','Phone','Owner cell','Email','Address','City','State','Group','School','Caller','Date','Status','Payout ($)'];
-    const rows=filtered.map(c=>[c.business,c.offerDetails,contactPerson(c),c.phone,c.ownerPhone,c.email,fullAddr(c),leadCity(c),leadState(c),c.group,c.school,nameOf(c.callerId),dateOf(c),statusText(c),c.payout?.amount!=null?c.payout.amount:''].map(csvEsc).join(','));
+    const headers=['Business','Discount text','Contact Name','Phone','Owner cell','Email','Address','City','State','Group','School','Caller','Date','Status','Payout ($)','Notes'];
+    const rows=filtered.map(c=>[c.business,c.offerDetails,contactPerson(c),c.phone,c.ownerPhone,c.email,fullAddr(c),leadCity(c),leadState(c),c.group,c.school,nameOf(c.callerId),dateOf(c),statusText(c),c.payout?.amount!=null?c.payout.amount:'',notesBlob(c)].map(csvEsc).join(','));
     const csv='﻿'+[headers.join(','),...rows].join('\r\n'); // BOM so Excel reads UTF-8
     const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}); const url=URL.createObjectURL(blob);
     const a=document.createElement('a'); a.href=url; a.download=`tailgate-discounts-${today()}.csv`; a.click(); URL.revokeObjectURL(url);
