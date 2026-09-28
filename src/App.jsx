@@ -277,7 +277,7 @@ function ResetPasswordPage({ onDone, onCancel }) {
 }
 
 // ─── EMPLOYEE / CALLER PORTAL ─────────────────────────────────────
-function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],timeclock=[],userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess,onSetMyPhone,onClockToggle}) {
+function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],timeclock=[],userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess,onSetMyPhone,onClockToggle,onAddLead}) {
   const [screen,setScreen]=useState('home');
   const [logId,setLogId]=useState('');
   const [phoneDraft,setPhoneDraft]=useState('');
@@ -363,7 +363,7 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],timecl
           ))}
         </div>
 
-        {screen==='home'&&<CallerHome myCalls={myCalls} onOpenLog={c=>setLogId(c.id)} groupDefs={groups}/>}
+        {screen==='home'&&<CallerHome myCalls={myCalls} onOpenLog={c=>setLogId(c.id)} groupDefs={groups} canAddLead={!!emp.canAddLeads} onAddLead={onAddLead?(rec=>onAddLead(emp.id,rec)):null}/>}
         {screen==='crm'&&<CallerCRM myCalls={myCalls} onOpenLog={c=>setLogId(c.id)} onWorkQueue={()=>setScreen('home')}/>}
         {screen==='agreements'&&<CallerAgreements/>}
         {screen==='payouts'&&<CallerPayouts emp={emp} deals={deals} assignments={assignments}/>}
@@ -575,7 +575,7 @@ function PaymentQueue({employees,deals,assignments,onMarkDealPaid,onMarkPeriodPa
 }
 
 // ─── EMPLOYEES ────────────────────────────────────────────────────
-function EmployeesView({employees,deals,assignments,signups=[],onAdd,onAddRequest,onDismissRequest,onDelete,onSetPhone}) {
+function EmployeesView({employees,deals,assignments,signups=[],onAdd,onAddRequest,onDismissRequest,onDelete,onSetPhone,onUpdateEmployee}) {
   const stats = emp => {
     const p=getPayments(emp.id,deals,assignments);
     return {
@@ -635,6 +635,14 @@ function EmployeesView({employees,deals,assignments,signups=[],onAdd,onAddReques
                   <button onClick={()=>onDelete(emp.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
                 </div>
                 <HR/>
+                {onUpdateEmployee&&(
+                  <div onClick={()=>onUpdateEmployee(emp.id,{canAddLeads:!emp.canAddLeads})} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'8px',cursor:'pointer',padding:'8px 0',marginBottom:'4px'}}>
+                    <div style={{minWidth:0}}><div style={{fontSize:'12px',fontWeight:'600'}}>Can add their own leads</div><div style={{fontSize:'11px',color:'var(--color-text-secondary)'}}>Lets this caller add new merchants themselves</div></div>
+                    <div style={{width:'38px',height:'22px',borderRadius:'100px',background:emp.canAddLeads?'#1D9E75':'#cbd5e1',position:'relative',flexShrink:0,transition:'background 0.15s'}}>
+                      <div style={{width:'18px',height:'18px',borderRadius:'50%',background:'#fff',position:'absolute',top:'2px',left:emp.canAddLeads?'18px':'2px',transition:'left 0.15s',boxShadow:'0 1px 2px rgba(0,0,0,0.2)'}}/>
+                    </div>
+                  </div>
+                )}
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
                   <div><div style={{fontSize:'11px',color:'var(--color-text-secondary)',marginBottom:'2px'}}>Total earned</div><div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500'}}>{fmt$(s.total)}</div></div>
                   <div><div style={{fontSize:'11px',color:'var(--color-text-secondary)',marginBottom:'2px'}}>Outstanding</div><div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:'#854F0B'}}>{fmt$(s.pending)}</div></div>
@@ -1867,8 +1875,42 @@ function GroupSection({ name, logoUrl, statsLeads, leads, onOpenLog }) {
 }
 
 
-function CallerHome({ myCalls, onOpenLog, groupDefs=[] }) {
+// Whitelisted callers can add their own merchant leads (admin flips the per-employee switch).
+function CallerAddLeadModal({ groupNames=[], onSave, onClose }) {
+  const [f,setF]=useState({business:'',group:'',contact:'',phone:'',ownerPhone:'',email:'',location:'',offerDetails:'',notes:''});
+  const s=(k,v)=>setF(p=>({...p,[k]:v}));
+  const ok=f.business.trim();
+  const submit=()=>{ if(!ok) return; onSave({
+    business:f.business.trim(), group:f.group.trim(), contact:f.contact.trim(),
+    phone:toE164(f.phone), ownerPhone:toE164(f.ownerPhone), email:f.email.trim(),
+    location:f.location.trim(), offerDetails:f.offerDetails.trim(), notes:f.notes.trim(),
+  }); };
+  return (
+    <ModalWrap title="Add a lead" onClose={onClose} wide>
+      <div style={{fontSize:'12px',color:'#64748b',marginBottom:'12px'}}>Add a merchant you know or called yourself. It goes into your list as a new lead to work.</div>
+      <Field label="Business name *"><input style={INP} value={f.business} onChange={e=>s('business',e.target.value)} placeholder="e.g. Cudoba" autoFocus/></Field>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+        <Field label="Group / organization"><input style={INP} value={f.group} onChange={e=>s('group',e.target.value)} list="tg-caller-groups" placeholder="e.g. South Carolina IFC"/><datalist id="tg-caller-groups">{groupNames.map(n=><option key={n} value={n}/>)}</datalist></Field>
+        <Field label="City / location"><input style={INP} value={f.location} onChange={e=>s('location',e.target.value)}/></Field>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+        <Field label="Contact name"><input style={INP} value={f.contact} onChange={e=>s('contact',e.target.value)}/></Field>
+        <Field label="Email"><input style={INP} value={f.email} onChange={e=>s('email',e.target.value)}/></Field>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'10px'}}>
+        <Field label="Phone"><input style={INP} value={f.phone} onChange={e=>s('phone',e.target.value)} placeholder="(555) 000-0000"/></Field>
+        <Field label="Owner’s cell (kept separate)"><input style={INP} value={f.ownerPhone} onChange={e=>s('ownerPhone',e.target.value)} placeholder="(555) 000-0000"/></Field>
+      </div>
+      <Field label="Discount they agreed to (optional)"><textarea style={{...INP,minHeight:'56px',resize:'vertical'}} value={f.offerDetails} onChange={e=>s('offerDetails',e.target.value)} placeholder="e.g. 15% off any purchase over $25"/></Field>
+      <Field label="Notes"><textarea style={{...INP,minHeight:'70px',resize:'vertical'}} value={f.notes} onChange={e=>s('notes',e.target.value)} placeholder="Anything worth remembering…"/></Field>
+      <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:ok?1:0.5}} disabled={!ok} onClick={submit}>Add lead to my list</button>
+    </ModalWrap>
+  );
+}
+
+function CallerHome({ myCalls, onOpenLog, groupDefs=[], canAddLead=false, onAddLead=null }) {
   const [showScript,setShowScript]=useState(false);
+  const [showAddLead,setShowAddLead]=useState(false);
   const [area,setArea]=useState('all');
   const [groupF,setGroupF]=useState('all');
   const [sort,setSort]=useState('priority');
@@ -1945,9 +1987,11 @@ function CallerHome({ myCalls, onOpenLog, groupDefs=[] }) {
           <option value="area">Sort: Location</option>
         </select>
         <button style={{...selStyle,display:'inline-flex',alignItems:'center',gap:'5px',cursor:'pointer',fontWeight:'500',color:'#185FA5'}} onClick={()=>setShowScript(true)}><FileText size={13}/>Script</button>
+        {canAddLead&&onAddLead&&<button style={{...selStyle,display:'inline-flex',alignItems:'center',gap:'5px',cursor:'pointer',fontWeight:'600',color:'#fff',background:'#1D9E75',border:'none'}} onClick={()=>setShowAddLead(true)}><Plus size={13}/>Add lead</button>}
       </div>
 
       {showScript&&<ScriptModal onClose={()=>setShowScript(false)}/>}
+      {showAddLead&&<CallerAddLeadModal groupNames={[...new Set([...groupDefs.map(g=>g.name),...myCalls.map(c=>c.group)].map(s=>(s||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b))} onSave={rec=>{onAddLead(rec);setShowAddLead(false);}} onClose={()=>setShowAddLead(false)}/>}
 
       <div style={{...CARD,marginBottom:'14px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
@@ -3374,9 +3418,17 @@ export default function TailgatePayday() {
   };
 
   const addEmployee=(name,email,phone)=>{ setE([...employees,{id:genId(),name,email:email||'',phone:(phone||'').trim(),createdAt:new Date().toISOString()}]); if(email) setSU(signups.filter(s=>s.email.toLowerCase()!==email.toLowerCase())); setModal(null); };
-  // A caller (or admin) sets an employee's phone — merge-write so we don't clobber concurrent roster edits.
-  const setEmployeePhone=(id,phone)=>{ const next=employees.map(e=>e.id===id?{...e,phone:(phone||'').trim()}:e); setE(next); };
+  // Merge a patch into one employee record (phone, canAddLeads, etc.).
+  const updateEmployee=(id,patch)=>setE(employees.map(e=>e.id===id?{...e,...patch}:e));
+  const setEmployeePhone=(id,phone)=>updateEmployee(id,{phone:(phone||'').trim()});
   const deleteEmployee=id=>setE(employees.filter(e=>e.id!==id));
+  // A whitelisted caller adds their own lead (business they know) — merge-append to the freshest server copy.
+  const addCallerLead=async(empId,rec)=>{
+    const lead={...rec, id:genId(), callerIds:[empId], status:'to_call', createdAt:new Date().toISOString(), selfAdded:true};
+    const server=await loadS('po_calls');
+    const next=[...(Array.isArray(server)?server:calls), lead];
+    setCalls(next); saveS('po_calls',next);
+  };
   const addPeriod=(empId,period)=>{ const ex=assignments.find(a=>a.employeeId===empId); if(ex) setA(assignments.map(a=>a.employeeId!==empId?a:{...a,periods:[...a.periods,{...period,id:genId(),paid:false}]})); else setA([...assignments,{id:genId(),employeeId:empId,periods:[{...period,id:genId(),paid:false}]}]); setModal(null); };
   const togglePeriodPaid=(aId,pId)=>setA(assignments.map(a=>a.id!==aId?a:{...a,periods:a.periods.map(p=>p.id!==pId?p:{...p,paid:!p.paid})}));
   const deletePeriod=(aId,pId)=>setA(assignments.map(a=>a.id!==aId?a:{...a,periods:a.periods.filter(p=>p.id!==pId)}).filter(a=>a.periods.length>0));
@@ -3404,7 +3456,7 @@ export default function TailgatePayday() {
   if(recovery) return <ResetPasswordPage onDone={()=>setRecovery(false)} onCancel={()=>{setRecovery(false);signOut();}}/>;
   if(!session) return <LoginPage/>;
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#64748b',fontSize:'14px'}}>Loading…</div>;
-  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} groups={groups} timeclock={timeclock} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess} onSetMyPhone={setEmployeePhone} onClockToggle={clockToggle}/>;
+  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} groups={groups} timeclock={timeclock} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess} onSetMyPhone={setEmployeePhone} onClockToggle={clockToggle} onAddLead={addCallerLead}/>;
 
   const TABS=[['employees','Employees',Users],['orgs','Organizations',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['groups','Groups',Users],['discounts','Discounts',MapPin],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
 
@@ -3431,7 +3483,7 @@ export default function TailgatePayday() {
         </div>
       </div>
 
-      {tab==='employees'&&<EmployeesView employees={employees} deals={deals} assignments={assignments} signups={signups} onAdd={()=>setModal({type:'addEmp'})} onAddRequest={email=>setModal({type:'addEmp',data:{email}})} onDismissRequest={dismissSignup} onDelete={deleteEmployee} onSetPhone={setEmployeePhone}/>}
+      {tab==='employees'&&<EmployeesView employees={employees} deals={deals} assignments={assignments} signups={signups} onAdd={()=>setModal({type:'addEmp'})} onAddRequest={email=>setModal({type:'addEmp',data:{email}})} onDismissRequest={dismissSignup} onDelete={deleteEmployee} onSetPhone={setEmployeePhone} onUpdateEmployee={updateEmployee}/>}
       {tab==='orgs'&&<OrgsView orgs={orgs} onAdd={()=>setModal({type:'addOrg'})} onDelete={deleteOrg}/>}
       {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onImportCSV={()=>setModal({type:'importCSV'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
       {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
