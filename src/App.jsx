@@ -277,7 +277,7 @@ function ResetPasswordPage({ onDone, onCancel }) {
 }
 
 // ─── EMPLOYEE / CALLER PORTAL ─────────────────────────────────────
-function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],timeclock=[],userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess,onSetMyPhone,onClockToggle,onAddLead}) {
+function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],timeclock=[],events=[],userEmail,onSignOut,onUpdateCall,onAddRecordingTake,onRequestAccess,onSetMyPhone,onClockToggle,onAddLead,onLogCallOpen,onCallPlaced,onCallLogged}) {
   const [screen,setScreen]=useState('home');
   const [logId,setLogId]=useState('');
   const [phoneDraft,setPhoneDraft]=useState('');
@@ -318,6 +318,20 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],timecl
   const todayMs=myShifts.reduce((sum,s)=>{ if((s.start||'').split('T')[0]!==t0) return sum; const st=new Date(s.start).getTime(); const en=s.end?new Date(s.end).getTime():nowTs; return sum+Math.max(0,en-st); },0);
   const fmtClock=ms=>{ const s=Math.max(0,Math.floor(ms/1000)); return `${Math.floor(s/3600)}:${String(Math.floor(s%3600/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`; };
   const todayHM=`${Math.floor(todayMs/3600000)}h ${Math.floor(todayMs%3600000/60000)}m`;
+
+  // Opening a lead logs the activity and auto-starts their clock if they forgot.
+  const openLog=c=>{ if(onLogCallOpen) onLogCallOpen(emp.id,c.id); setLogId(c.id); };
+  // Gamification: today's effort + a day streak from the activity log.
+  const myStats=(()=>{
+    const mine=(events||[]).filter(e=>e.empId===emp.id);
+    const dayOf=e=>(e.at||'').split('T')[0];
+    const logsToday=mine.filter(e=>e.kind==='log'&&dayOf(e)===t0).length;
+    const callsToday=mine.filter(e=>e.kind==='call'&&dayOf(e)===t0).length;
+    const days=new Set(mine.filter(e=>e.kind==='log').map(dayOf));
+    let streak=0; for(let i=0;i<365;i++){ if(days.has(addDays(t0,-i))) streak++; else if(i>0) break; }
+    const securedToday=myCalls.filter(c=>leadDone(c)&&((c.recordedAt||'').split('T')[0]===t0)).length;
+    return {logsToday,callsToday,streak,securedToday,clockedHM:todayHM};
+  })();
 
   return (
     <div style={{minHeight:'100vh',background:'#f1f5f9',padding:'20px'}}>
@@ -363,12 +377,13 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],timecl
           ))}
         </div>
 
-        {screen==='home'&&<CallerHome myCalls={myCalls} onOpenLog={c=>setLogId(c.id)} groupDefs={groups} canAddLead={!!emp.canAddLeads} onAddLead={onAddLead?(rec=>onAddLead(emp.id,rec)):null}/>}
-        {screen==='crm'&&<CallerCRM myCalls={myCalls} onOpenLog={c=>setLogId(c.id)} onWorkQueue={()=>setScreen('home')}/>}
+        {screen==='home'&&<CallerHome myCalls={myCalls} onOpenLog={openLog} groupDefs={groups} canAddLead={!!emp.canAddLeads} onAddLead={onAddLead?(rec=>onAddLead(emp.id,rec)):null} stats={myStats}/>}
+        {screen==='crm'&&<CallerCRM myCalls={myCalls} onOpenLog={openLog} onWorkQueue={()=>setScreen('home')}/>}
         {screen==='agreements'&&<CallerAgreements/>}
         {screen==='payouts'&&<CallerPayouts emp={emp} deals={deals} assignments={assignments}/>}
       </div>
-      {logCall&&<LogCallModal call={logCall} callerName={emp.name} callerEmail={emp.email} myCallerId={emp.id} orgs={orgs} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake} onClose={()=>setLogId('')}/>}
+      {logCall&&<LogCallModal call={logCall} callerName={emp.name} callerEmail={emp.email} myCallerId={emp.id} orgs={orgs} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake}
+        onCalled={id=>onCallPlaced&&onCallPlaced(emp.id,id)} onLogged={(id,outcome,dialed)=>onCallLogged&&onCallLogged(emp.id,id,outcome,dialed)} onClose={()=>setLogId('')}/>}
     </div>
   );
 }
@@ -1398,7 +1413,20 @@ const NoteField = ({note,setNote}) => (
   <Field label="Add a note"><textarea style={{...INP,minHeight:'58px',resize:'vertical'}} placeholder="What happened on the call?" value={note} onChange={e=>setNote(e.target.value)}/></Field>
 );
 
-function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUpdateCall, onAddRecordingTake, onClose }) {
+const CALL_WINDOW_SECS = 10; // how long the "dial now" countdown runs before outcomes unlock
+function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUpdateCall, onAddRecordingTake, onCalled, onLogged, onClose }) {
+  const dialPhone=toE164(call.phone||'')||call.phone||'';
+  const [callStarted,setCallStarted]=useState(false);
+  const [secsLeft,setSecsLeft]=useState(CALL_WINDOW_SECS);
+  // Countdown runs until they dial (or it expires) — outcomes stay locked meanwhile.
+  useEffect(()=>{
+    if(!dialPhone||callStarted||secsLeft<=0) return;
+    const t=setTimeout(()=>setSecsLeft(s=>s-1),1000);
+    return ()=>clearTimeout(t);
+  },[dialPhone,callStarted,secsLeft]);
+  const locked=!!dialPhone&&!callStarted&&secsLeft>0;
+  const skipped=!!dialPhone&&!callStarted&&secsLeft<=0;
+  const startCall=()=>{ setCallStarted(true); if(onCalled) onCalled(call.id); };
   const [outcome,setOutcome]=useState(null);
   const [submittedTake,setSubmittedTake]=useState(call.submittedTake??null);
   const [dm,setDm]=useState(call.decisionMaker||{title:'',firstName:'',lastName:''});
@@ -1469,7 +1497,11 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
 
   const withNote=base=>note.trim()?((base?base+'\n\n':'')+`${today()}: ${note.trim()}`):base;
   // Logging any outcome claims the lead for this caller (removes it from other callers' pool)
-  const commit=patch=>{ onUpdateCall(call.id,{...patch, ...(myCallerId?{callerId:myCallerId}:{}), notes:withNote(call.notes||'')}); onClose(); };
+  const commit=patch=>{
+    onUpdateCall(call.id,{...patch, ...(myCallerId?{callerId:myCallerId}:{}), dialed:callStarted, notes:withNote(call.notes||'')});
+    if(onLogged) onLogged(call.id, patch.status, callStarted);
+    onClose();
+  };
   // Info email — one-click server send via Resend (Supabase Edge Function). The personalized
   // Zoho sign-up link (merchant name + email pre-filled) and the caller's name are auto-appended.
   const emailTo=email||call.email;
@@ -1633,14 +1665,42 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
         </div>
       )}
 
+      {/* Dial first — the call bar gates the outcomes for a short window */}
+      {dialPhone?(
+        <div style={{display:'flex',alignItems:'center',gap:'14px',flexWrap:'wrap',padding:'14px 16px',marginBottom:'16px',borderRadius:'var(--border-radius-lg)',
+          border:`1.5px solid ${callStarted?'#5DCAA5':skipped?'#EF9F27':'#1D9E75'}`,background:callStarted?'#E1F5EE':skipped?'#FAEEDA':'#F0FBF6'}}>
+          <a href={`tel:${dialPhone}`} onClick={startCall} style={{display:'inline-flex',alignItems:'center',gap:'9px',padding:'13px 24px',borderRadius:'var(--border-radius-md)',
+            background:callStarted?'#0F6E56':'#1D9E75',color:'#fff',textDecoration:'none',fontWeight:'700',fontSize:'16px',fontFamily:'var(--font-sans)',boxShadow:'0 1px 4px rgba(29,158,117,0.4)'}}>
+            <Phone size={18}/>{callStarted?'Call again':`Call ${call.phone||dialPhone}`}
+          </a>
+          <div style={{minWidth:0,flex:1}}>
+            {callStarted?(
+              <div style={{fontSize:'13px',fontWeight:'700',color:'#0F6E56'}}>Call placed — log how it went below.</div>
+            ):secsLeft>0?(
+              <>
+                <div style={{fontSize:'15px',fontWeight:'700',color:'#0F6E56'}}>Dial now — {secsLeft}s</div>
+                <div style={{fontSize:'12px',color:'#3d6b5c'}}>Opens in your phone app / Google Voice. Outcomes unlock once you dial.</div>
+              </>
+            ):(
+              <>
+                <div style={{fontSize:'13px',fontWeight:'700',color:'#854F0B'}}>You didn’t dial — this will be logged as “not called.”</div>
+                <div style={{fontSize:'12px',color:'#92722f'}}>Tap Call to do it properly, or log it anyway below.</div>
+              </>
+            )}
+          </div>
+        </div>
+      ):(
+        <div style={{padding:'10px 14px',marginBottom:'16px',borderRadius:'var(--border-radius-md)',background:'#FAEEDA',border:'0.5px solid #EF9F27',fontSize:'12px',color:'#854F0B',fontWeight:'500'}}>No phone number on this lead — add one in the details below so it can be dialed.</div>
+      )}
+
       {/* Outcome buttons — the very first action */}
-      <div style={{fontWeight:'600',fontSize:'16px',margin:'0 0 12px'}}>How did the call go?</div>
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:'12px',marginBottom:'16px'}}>
+      <div style={{fontWeight:'600',fontSize:'16px',margin:'0 0 12px'}}>How did the call go?{locked&&<span style={{fontSize:'13px',fontWeight:'500',color:'#854F0B',marginLeft:'8px'}}>— dial first ({secsLeft}s)</span>}</div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:'12px',marginBottom:'16px',opacity:locked?0.45:1,pointerEvents:locked?'none':'auto'}}>
         {OUTCOMES.map(([key,label,color,sub,Icon])=>{
           const on=outcome===key; const c=CC[color];
           return (
-            <button key={key} onClick={()=>{ setOutcome(key); if(key!=='completed') setCompleteMode(null); }}
-              style={{aspectRatio:'1 / 1',minHeight:'138px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:'10px',textAlign:'center',padding:'14px',cursor:'pointer',borderRadius:'var(--border-radius-lg)',
+            <button key={key} disabled={locked} onClick={()=>{ setOutcome(key); if(key!=='completed') setCompleteMode(null); }}
+              style={{aspectRatio:'1 / 1',minHeight:'138px',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',gap:'10px',textAlign:'center',padding:'14px',cursor:locked?'not-allowed':'pointer',borderRadius:'var(--border-radius-lg)',
                 border:`1px solid ${on?c.br:'var(--color-border-tertiary)'}`,background:on?c.bg:'var(--color-background-primary)',
                 boxShadow:on?`0 0 0 2px ${c.br}`:'none',fontFamily:'var(--font-sans)',transition:'all 0.12s'}}>
               <Icon size={28} color={on?c.tx:'#64748b'} strokeWidth={1.75}/>
@@ -1908,7 +1968,7 @@ function CallerAddLeadModal({ groupNames=[], onSave, onClose }) {
   );
 }
 
-function CallerHome({ myCalls, onOpenLog, groupDefs=[], canAddLead=false, onAddLead=null }) {
+function CallerHome({ myCalls, onOpenLog, groupDefs=[], canAddLead=false, onAddLead=null, stats=null }) {
   const [showScript,setShowScript]=useState(false);
   const [showAddLead,setShowAddLead]=useState(false);
   const [area,setArea]=useState('all');
@@ -1963,6 +2023,25 @@ function CallerHome({ myCalls, onOpenLog, groupDefs=[], canAddLead=false, onAddL
           </div>
           {fVis.map(c=><LeadRow key={c.id} c={c} onOpenLog={onOpenLog}/>)}
           {fRem>0&&<div style={{padding:'14px 18px',textAlign:'center'}}><button style={BTN(false)} onClick={()=>setShownF(s=>s+LEAD_BATCH)}>{fRem} more — Show {Math.min(LEAD_BATCH,fRem)}</button></div>}
+        </div>
+      )}
+      {stats&&(
+        <div style={{display:'flex',alignItems:'center',gap:'18px',flexWrap:'wrap',padding:'12px 16px',marginBottom:'14px',borderRadius:'var(--border-radius-lg)',background:'linear-gradient(90deg,#101f6b,#1b4bb8)',color:'#fff'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+            <span style={{fontSize:'24px',fontWeight:'800',fontFamily:'var(--font-mono)'}}>{stats.logsToday}</span>
+            <span style={{fontSize:'12px',opacity:0.85,lineHeight:1.2}}>calls logged<br/>today</span>
+          </div>
+          <div style={{width:'1px',height:'30px',background:'rgba(255,255,255,0.25)'}}/>
+          <div style={{display:'flex',alignItems:'center',gap:'8px'}}>
+            <span style={{fontSize:'24px',fontWeight:'800',fontFamily:'var(--font-mono)'}}>{stats.securedToday}</span>
+            <span style={{fontSize:'12px',opacity:0.85,lineHeight:1.2}}>discounts<br/>secured</span>
+          </div>
+          <div style={{width:'1px',height:'30px',background:'rgba(255,255,255,0.25)'}}/>
+          <div style={{display:'flex',alignItems:'center',gap:'7px'}}>
+            <span style={{fontSize:'20px'}}>🔥</span>
+            <span style={{fontSize:'15px',fontWeight:'700'}}>{stats.streak}-day streak</span>
+          </div>
+          <div style={{marginLeft:'auto',fontSize:'12px',opacity:0.85}}>Clocked today: <b>{stats.clockedHM}</b></div>
         </div>
       )}
       <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',marginBottom:'14px'}}>
@@ -2347,16 +2426,22 @@ ${signed?`<div class="audit">Signed electronically${signDate?` on ${esc(signDate
 const AGR_FIELD_ORDER=[['business_name','Business name'],['contact_person','Contact person'],['phone','Phone'],['email','Email'],['address','Address'],['discount_offered','Discount offered']];
 function AgreementReview({ agreementId }) {
   const [agr,setAgr]=useState(null); const [state,setState]=useState('loading'); const [msg,setMsg]=useState('');
+  const [sends,setSends]=useState(null); // null = not readable (policy missing), [] = none yet
   useEffect(()=>{
     let cancel=false;
     (async()=>{
       const {data,error}=await supabase.from('agreements')
-        .select('id,status,prefill,signatures(signer_name,signer_title,submitted_fields,signed_at)')
+        .select('id,status,prefill,created_at,signatures(signer_name,signer_title,submitted_fields,signature_value,signature_kind,esign_consent_at,ip,user_agent,channel,signed_at)')
         .eq('id',agreementId).maybeSingle();
       if(cancel) return;
       if(error){ setState('error'); setMsg(error.message); return; }
       if(!data){ setState('missing'); return; }
       setAgr(data); setState('ok');
+      // Delivery trail: who the rep actually sent the link to. Needs a read policy on
+      // agreement_tokens — if it isn't there yet we just hide the panel instead of erroring.
+      const {data:tk}=await supabase.from('agreement_tokens')
+        .select('channel,sent_to,created_at,used_at').eq('agreement_id',agreementId).order('created_at',{ascending:true});
+      if(!cancel&&Array.isArray(tk)) setSends(tk);
     })();
     return ()=>{cancel=true;};
   },[agreementId]);
@@ -2377,6 +2462,30 @@ function AgreementReview({ agreementId }) {
             ))}
             {sig?.signer_name&&<div style={{marginTop:'4px'}}><span style={{color:'#64748b'}}>Signed by: </span>{sig.signer_name}{sig.signer_title?`, ${sig.signer_title}`:''}{sig.signed_at?` · ${fmtDate((sig.signed_at||'').split('T')[0])}`:''}</div>}
           </div>
+
+          {/* Verification trail — where it was sent, and exactly how it was signed */}
+          <div style={{marginTop:'10px',padding:'10px 12px',borderRadius:'var(--border-radius-md)',background:'#fff',border:'0.5px solid var(--color-border-tertiary)'}}>
+            <div style={{fontSize:'11px',fontWeight:'700',color:'#64748b',textTransform:'uppercase',letterSpacing:'0.4px',marginBottom:'6px'}}>Verification trail</div>
+            {sends===null?(
+              <div style={{fontSize:'11px',color:'#854F0B'}}>Delivery history unavailable — run the agreement-audit SQL once to enable it (see notes).</div>
+            ):sends.length===0?(
+              <div style={{fontSize:'11px',color:'#854F0B'}}>No send recorded — this agreement was never texted or emailed from the app.</div>
+            ):sends.map((s,i)=>(
+              <div key={i} style={{fontSize:'11.5px',color:'#0f172a',padding:'2px 0'}}>
+                <b>{s.channel==='sms'?'Texted':'Emailed'} to {s.sent_to}</b>
+                <span style={{color:'#64748b'}}> · {s.created_at?new Date(s.created_at).toLocaleString():''}{s.used_at?' · link opened':''}</span>
+              </div>
+            ))}
+            {sig&&(
+              <div style={{marginTop:'6px',paddingTop:'6px',borderTop:'0.5px solid var(--color-border-tertiary)',fontSize:'11.5px',color:'#0f172a',lineHeight:1.7}}>
+                <div><span style={{color:'#64748b'}}>Signature ({sig.signature_kind||'typed'}): </span><b style={{fontFamily:"'Segoe Script','Brush Script MT',cursive",fontSize:'14px'}}>{sig.signature_value||sig.signer_name}</b></div>
+                <div><span style={{color:'#64748b'}}>Completed at: </span>{sig.signed_at?new Date(sig.signed_at).toLocaleString():'—'}{sig.channel?` · via ${sig.channel==='sms'?'text link':'email link'}`:''}</div>
+                {sig.esign_consent_at&&<div><span style={{color:'#64748b'}}>E-sign consent: </span>{new Date(sig.esign_consent_at).toLocaleString()}</div>}
+                {(sig.ip||sig.user_agent)&&<div><span style={{color:'#64748b'}}>Signed from: </span>{sig.ip||'unknown IP'}{sig.user_agent?` · ${String(sig.user_agent).slice(0,70)}`:''}</div>}
+              </div>
+            )}
+          </div>
+
           {agr.status==='signed'&&<AgreementPdfButton agreementId={agreementId}/>}
           <div style={{fontSize:'11px',color:'#64748b',marginTop:'8px',lineHeight:1.5}}>Check every field is right. If anything’s wrong, reach back out to the merchant, then Reject; otherwise Approve to lock it in and pay.</div>
         </>
@@ -2534,6 +2643,75 @@ function GroupMetaModal({ group, onSave, onClose }) {
         <button style={{...BTN(true),opacity:name.trim()?1:0.5}} disabled={!name.trim()} onClick={()=>onSave({...(group?.id?{id:group.id}:{}),name,logoUrl})}>Save group</button>
       </div>
     </ModalWrap>
+  );
+}
+
+// ── Super-admin: team analytics — clocked time vs. calls actually made ──
+function AdminAnalyticsView({ employees, events=[], timeclock=[], calls=[] }) {
+  const [range,setRange]=useState('7');
+  const [now]=useState(()=>Date.now()); // snapshot once; open shifts count up to page load
+  const since=range==='all'?'':addDays(today(),-(parseInt(range,10)-1));
+  const inRange=d=>!since||(d||'')>=since;
+  const dayOf=s=>(s||'').split('T')[0];
+  const hm=ms=>`${Math.floor(ms/3600000)}h ${Math.floor(ms%3600000/60000)}m`;
+
+  const rows=employees.map(emp=>{
+    const ev=events.filter(e=>e.empId===emp.id&&inRange(dayOf(e.at)));
+    const shifts=timeclock.filter(s=>s.employeeId===emp.id&&inRange(dayOf(s.start)));
+    const open=timeclock.find(s=>s.employeeId===emp.id&&!s.end);
+    const ms=shifts.reduce((sum,s)=>sum+Math.max(0,(s.end?new Date(s.end).getTime():now)-new Date(s.start).getTime()),0);
+    const logs=ev.filter(e=>e.kind==='log');
+    const dialed=logs.filter(e=>e.dialed).length;
+    const hours=ms/3600000;
+    const secured=calls.filter(c=>c.callerId===emp.id&&leadDone(c)&&inRange((c.recordedAt||'').split('T')[0])).length;
+    const byOutcome={};
+    logs.forEach(e=>{ const k=e.outcome||'other'; byOutcome[k]=(byOutcome[k]||0)+1; });
+    return {emp, open:!!open, ms, opens:ev.filter(e=>e.kind==='open').length, calls:ev.filter(e=>e.kind==='call').length,
+      logs:logs.length, dialed, perHour:hours>0?logs.length/hours:0, secured, byOutcome, days:new Set(logs.map(e=>dayOf(e.at))).size};
+  }).filter(r=>r.ms>0||r.logs>0||r.opens>0).sort((a,b)=>b.logs-a.logs);
+
+  const tot=rows.reduce((a,r)=>({ms:a.ms+r.ms,logs:a.logs+r.logs,calls:a.calls+r.calls,secured:a.secured+r.secured}),{ms:0,logs:0,calls:0,secured:0});
+  const dialRate=tot.logs?Math.round(rows.reduce((a,r)=>a+r.dialed,0)/tot.logs*100):0;
+
+  return (
+    <div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px',gap:'10px',flexWrap:'wrap'}}>
+        <div>
+          <h3 style={{margin:0,fontSize:'16px',fontWeight:'500'}}>Team analytics</h3>
+          <div style={{fontSize:'13px',color:'#64748b',marginTop:'2px'}}>Clocked time vs. calls actually dialed and logged. Ranked by calls logged.</div>
+        </div>
+        <select style={{...INP,width:'auto',padding:'6px 9px',fontSize:'12px'}} value={range} onChange={e=>setRange(e.target.value)}>
+          <option value="1">Today</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="all">All time</option>
+        </select>
+      </div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:'10px',marginBottom:'16px'}}>
+        <Metric label="Hours clocked" value={hm(tot.ms)}/>
+        <Metric label="Calls logged" value={tot.logs} color="#185FA5"/>
+        <Metric label="Actually dialed" value={`${dialRate}%`} color={dialRate>=80?'#0F6E56':'#854F0B'}/>
+        <Metric label="Discounts secured" value={tot.secured} color="#0F6E56"/>
+      </div>
+      <div style={CARD}>
+        <div style={{display:'grid',gridTemplateColumns:'1.3fr repeat(5,0.8fr)',gap:'10px',padding:'10px 16px',borderBottom:'0.5px solid var(--color-border-tertiary)',fontSize:'11px',fontWeight:'600',textTransform:'uppercase',letterSpacing:'0.4px',color:'#64748b'}}>
+          <span>Caller</span><span>Clocked</span><span>Logged</span><span>Per hour</span><span>Dialed</span><span>Secured</span>
+        </div>
+        {rows.length===0?(
+          <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>No activity in this range yet. It fills in as callers clock in and log calls.</div>
+        ):rows.map(r=>(
+          <div key={r.emp.id} style={{display:'grid',gridTemplateColumns:'1.3fr repeat(5,0.8fr)',gap:'10px',padding:'12px 16px',alignItems:'center',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+            <div style={{minWidth:0}}>
+              <div style={{fontSize:'14px',fontWeight:'500',display:'flex',alignItems:'center',gap:'7px'}}>{r.emp.name}{r.open&&<span style={{width:'7px',height:'7px',borderRadius:'50%',background:'#1D9E75',animation:'tgpulse 1.2s infinite'}} title="Clocked in now"/>}</div>
+              <div style={{fontSize:'11px',color:'#64748b'}}>{r.days} active day{r.days===1?'':'s'}{Object.keys(r.byOutcome).length?` · ${Object.entries(r.byOutcome).map(([k,v])=>`${(CALL_STATUS[k]||{label:k}).label} ${v}`).join(', ')}`:''}</div>
+            </div>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:'13px'}}>{hm(r.ms)}</div>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'600'}}>{r.logs}</div>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:'13px',color:r.perHour>=4?'#0F6E56':r.perHour>=2?'#854F0B':'#A32D2D'}}>{r.perHour?r.perHour.toFixed(1):'—'}</div>
+            <div style={{fontSize:'13px',color:r.logs&&r.dialed/r.logs>=0.8?'#0F6E56':'#854F0B'}}>{r.logs?Math.round(r.dialed/r.logs*100):0}%</div>
+            <div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'600',color:'#0F6E56'}}>{r.secured}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{fontSize:'11px',color:'#64748b',marginTop:'10px',lineHeight:1.5}}>“Dialed” is the share of logged calls where the caller actually tapped Call rather than logging without dialing. Clock starts automatically the first time they open Log Call.</div>
+    </div>
   );
 }
 
@@ -3262,6 +3440,7 @@ export default function TailgatePayday() {
   const [orgs,setOrgs]=useState([]);
   const [groups,setGroups]=useState([]); // po_groups: {id,name,logoUrl,createdAt}
   const [timeclock,setTimeclock]=useState([]); // po_timeclock: {id,employeeId,start,end}
+  const [events,setEvents]=useState([]); // po_events: {id,empId,kind:'open'|'call'|'log',callId,outcome,at}
   const [loading,setLoading]=useState(true);
   const [modal,setModal]=useState(null);
   const [calls,setCalls]=useState([]);
@@ -3281,10 +3460,10 @@ export default function TailgatePayday() {
   // Data load
   useEffect(()=>{
     if(!session) return;
-    Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn'),loadS('po_calls'),loadS('po_signups'),loadS('po_orgs'),loadS('po_groups'),loadS('po_timeclock')]).then(([e,d,a,c,s,o,g,tc])=>{
+    Promise.all([loadS('po_emp'),loadS('po_deals'),loadS('po_asgn'),loadS('po_calls'),loadS('po_signups'),loadS('po_orgs'),loadS('po_groups'),loadS('po_timeclock'),loadS('po_events')]).then(([e,d,a,c,s,o,g,tc,ev])=>{
       const rawCalls=Array.isArray(c)?c:[]; const migratedCalls=migrateCalls(rawCalls);
       if(migratedCalls!==rawCalls) saveS('po_calls',migratedCalls); // persist the backfill once
-      setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setCalls(migratedCalls); setSignups(Array.isArray(s)?s:[]); setOrgs(Array.isArray(o)?o:[]); setGroups(Array.isArray(g)?g:[]); setTimeclock(Array.isArray(tc)?tc:[]); setLoading(false);
+      setEmployees(Array.isArray(e)?e:[]); setDeals(Array.isArray(d)?d:[]); setAssignments(Array.isArray(a)?a:[]); setCalls(migratedCalls); setSignups(Array.isArray(s)?s:[]); setOrgs(Array.isArray(o)?o:[]); setGroups(Array.isArray(g)?g:[]); setTimeclock(Array.isArray(tc)?tc:[]); setEvents(Array.isArray(ev)?ev:[]); setLoading(false);
     });
   },[session]);
 
@@ -3325,6 +3504,20 @@ export default function TailgatePayday() {
                     : [...base,{id:genId(),employeeId:empId,start:new Date().toISOString(),end:null}];
     setTimeclock(next); saveS('po_timeclock',next);
   };
+  // ── Activity log powering the analytics dashboard (merge-write, capped so it can't grow forever) ──
+  const logEvent=async ev=>{
+    const server=await loadS('po_events');
+    const base=Array.isArray(server)?server:events;
+    const next=[...base,{id:genId(),at:new Date().toISOString(),...ev}].slice(-8000);
+    setEvents(next); saveS('po_events',next);
+  };
+  // Opening Log Call starts the clock automatically if they forgot to.
+  const onLogCallOpen=(empId,callId)=>{
+    logEvent({empId,callId,kind:'open'});
+    if(!timeclock.some(s=>s.employeeId===empId&&!s.end)) clockToggle(empId);
+  };
+  const onCallPlaced=(empId,callId)=>logEvent({empId,callId,kind:'call'});
+  const onCallLogged=(empId,callId,outcome,dialed)=>logEvent({empId,callId,kind:'log',outcome,dialed:!!dialed});
   // Super-admin Groups (Phase 3.2): persistent group definitions with logos. Renaming also
   // renames the group on every matching lead so logos + accumulation stay joined by name.
   const saveGroupMeta=g=>{
@@ -3456,9 +3649,10 @@ export default function TailgatePayday() {
   if(recovery) return <ResetPasswordPage onDone={()=>setRecovery(false)} onCancel={()=>{setRecovery(false);signOut();}}/>;
   if(!session) return <LoginPage/>;
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#64748b',fontSize:'14px'}}>Loading…</div>;
-  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} groups={groups} timeclock={timeclock} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess} onSetMyPhone={setEmployeePhone} onClockToggle={clockToggle} onAddLead={addCallerLead}/>;
+  if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} groups={groups} timeclock={timeclock} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess} onSetMyPhone={setEmployeePhone} onClockToggle={clockToggle} onAddLead={addCallerLead}
+    events={events} onLogCallOpen={onLogCallOpen} onCallPlaced={onCallPlaced} onCallLogged={onCallLogged}/>;
 
-  const TABS=[['employees','Employees',Users],['orgs','Organizations',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['groups','Groups',Users],['discounts','Discounts',MapPin],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
+  const TABS=[['employees','Employees',Users],['orgs','Organizations',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['groups','Groups',Users],['discounts','Discounts',MapPin],['analytics','Analytics',Clock],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
 
   return (
     <div style={{padding:'20px',maxWidth:'980px',margin:'0 auto',fontFamily:'var(--font-sans)'}}>
@@ -3491,6 +3685,7 @@ export default function TailgatePayday() {
       {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})} onEditGroup={(groupKey,data)=>setModal({type:'editGroup',data:{groupKey,...data}})} onCallAgain={callAgainNow} onEdit={c=>setModal({type:'editLead',data:c})}/>}
       {tab==='groups'&&<AdminGroupsView groups={groups} calls={calls} onAdd={()=>setModal({type:'groupMeta'})} onEdit={g=>setModal({type:'groupMeta',data:g})} onDelete={deleteGroupMeta}/>}
       {tab==='discounts'&&<AdminDiscountsView employees={employees} calls={calls}/>}
+      {tab==='analytics'&&<AdminAnalyticsView employees={employees} events={events} timeclock={timeclock} calls={calls}/>}
 
       {modal?.type==='addEmp'&&<AddEmployeeModal initialEmail={modal.data?.email} onAdd={addEmployee} onClose={()=>setModal(null)}/>}
       {modal?.type==='addOrg'&&<AddOrgModal onAdd={addOrg} onClose={()=>setModal(null)}/>}
