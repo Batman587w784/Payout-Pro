@@ -354,7 +354,7 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],timecl
               <div><div style={{fontWeight:'500',fontSize:'16px'}}>{emp.name}</div><div style={{fontSize:'12px',color:'#64748b'}}>{onClockToggle?`Today: ${todayHM}${openShift?' · clocked in':''}`:'Merchant caller portal'}</div></div>
             </div>
           </div>
-          <button style={BTN(false)} onClick={onSignOut}><LogOut size={13}/>Sign out</button>
+          <button style={BTN(false)} onClick={async()=>{ if(openShift&&onClockToggle) await onClockToggle(emp.id); onSignOut(); }}><LogOut size={13}/>{openShift?'Clock out & sign out':'Sign out'}</button>
         </div>
 
         {emp&&!emp.phone&&!phoneDismissed&&onSetMyPhone&&(
@@ -3321,6 +3321,9 @@ function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose 
   // Every group name the app already knows — defined groups (po_groups) plus any name that lives only on a lead —
   // so a batch can be added to an EXISTING group, not just a new one.
   const existingGroupNames=[...new Set([...groups.map(g=>g.name),...existing.map(c=>c.group)].map(s=>(s||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  // Callers who already work this group — new leads inherit them when none are picked below.
+  const inheritedCallerIds=groupName?[...new Set(existing.filter(c=>(c.group||'').trim().toLowerCase()===groupName.toLowerCase()).flatMap(leadPool))].filter(Boolean):[];
+  const inheritedNames=inheritedCallerIds.map(id=>employees.find(e=>e.id===id)?.name).filter(Boolean);
   // Compare each incoming lead against existing leads in the same group + rows already accepted this batch.
   const runDedup=()=>{
     const built=validRows.map(build);
@@ -3436,7 +3439,11 @@ function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose 
         {groupName&&!newGroupMode&&<div style={{fontSize:'11px',color:'#0F6E56',marginTop:'4px'}}>Adding to existing group “{groupName}”.</div>}
         {groupName&&newGroupMode&&!matchedGroupId&&<div style={{fontSize:'11px',color:'#854F0B',marginTop:'4px'}}>New group — add a logo for it later under the Groups tab.</div>}
       </div>
-      <div style={{marginBottom:'12px'}}><MultiEmpPicker employees={employees} value={callerIds} onChange={setCallerIds} label="Assign these leads to caller(s) — optional, tap to add"/></div>
+      <div style={{marginBottom:'12px'}}>
+        <MultiEmpPicker employees={employees} value={callerIds} onChange={setCallerIds} label="Assign these leads to caller(s) — optional, tap to add"/>
+        {callerIds.length===0&&inheritedNames.length>0&&<div style={{fontSize:'11.5px',color:'#0F6E56',marginTop:'-6px'}}>Leave blank and these go straight to the group&rsquo;s current callers: <b>{inheritedNames.join(', ')}</b> — they&rsquo;ll see them within a few seconds.</div>}
+        {callerIds.length===0&&inheritedNames.length===0&&groupName&&<div style={{fontSize:'11.5px',color:'#854F0B',marginTop:'-6px'}}>Nobody is assigned to this group yet — pick at least one caller or these leads won&rsquo;t show for anyone.</div>}
+      </div>
       <div style={{marginBottom:'12px'}}>
         <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'5px',fontWeight:'500'}}>{map.value?'Fallback payout — used only for rows where your “Payout per call” column is blank':'Standard payout for this whole batch (or map a “Payout per call” column below for per-lead amounts)'}{batchValue?` — $${batchValue}`:''}</label>
         <ValuePicker value={batchValue} onChange={setBatchValue}/>
@@ -3625,9 +3632,15 @@ export default function TailgatePayday() {
   // Append imported leads to the FRESHEST server copy (not the admin's possibly-stale local list),
   // then confirm the write actually landed in Supabase so the leads truly reach the callers.
   const addLeads=async(leads,callerIds)=>{
-    const ls=leads.map(l=>({...l,id:genId(),callerIds:callerIds||[],status:'to_call',createdAt:new Date().toISOString()}));
     const server=await loadS('po_calls');
-    const next=[...(Array.isArray(server)?server:calls),...ls];
+    const base=Array.isArray(server)?server:calls;
+    // If no caller was picked at import, inherit whoever already works that group — otherwise the
+    // new leads sit unassigned and nobody sees them until the group's callers get re-stamped.
+    const gname=((leads[0]||{}).group||'').trim().toLowerCase();
+    const inherited=(callerIds&&callerIds.length)?callerIds
+      :[...new Set(base.filter(c=>(c.group||'').trim().toLowerCase()===gname&&gname).flatMap(leadPool))].filter(Boolean);
+    const ls=leads.map(l=>({...l,id:genId(),callerIds:inherited,status:'to_call',createdAt:new Date().toISOString()}));
+    const next=[...base,...ls];
     setCalls(next);
     const err=await saveS('po_calls',next);
     if(err) throw new Error(err.message||'Could not save to the server'); // surfaced by the import modal
