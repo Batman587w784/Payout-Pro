@@ -116,7 +116,7 @@ function getPayments(empId, deals, assignments) {
       out.push({
         id:`m-${p.id}`, date:p.endDate, type:'merchant', desc:mdesc,
         amount:periodAmt(p),
-        paid:p.paid, assignmentId:a.id, periodId:p.id
+        paid:p.paid, assignmentId:a.id, periodId:p.id, callId:p.callId||null
       });
     });
   });
@@ -531,7 +531,48 @@ function CSVImportModal({employees,assignments,onSave,onClose}) {
 }
 
 // ─── PAYMENT QUEUE ────────────────────────────────────────────────
-function PaymentQueue({employees,deals,assignments,onMarkDealPaid,onMarkPeriodPaid}) {
+// One compact line per pending payment; expand to check the discount, recording or agreement.
+function PaymentRow({ p, calls=[], open, onToggle, onConfirm }) {
+  const call=p.callId?calls.find(c=>c.id===p.callId):null;
+  const rec=call?((call.recordings||[]).find(r=>r.take===call.submittedTake)||(call.recordings||[])[call.recordings?.length-1]||null):null;
+  const [url,setUrl]=useState(''); const [busy,setBusy]=useState(false); const [err,setErr]=useState('');
+  const play=async()=>{ if(url){setUrl('');return;} if(!rec) return; setBusy(true); setErr('');
+    try{ const {data,error}=await supabase.storage.from(CALL_BUCKET).createSignedUrl(rec.recordingPath,3600); if(error) throw error; setUrl(data.signedUrl); }
+    catch(e){ setErr('Could not load recording: '+(e.message||e)); } finally{ setBusy(false); } };
+  return (
+    <div style={{borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+      <div onClick={onToggle} style={{display:'grid',gridTemplateColumns:'auto 1fr auto auto auto',gap:'12px',alignItems:'center',padding:'9px 18px',cursor:'pointer'}}>
+        <span style={{fontSize:'11.5px',color:'var(--color-text-secondary)',whiteSpace:'nowrap'}}>{fmtDate(p.date)}</span>
+        <span style={{fontSize:'13px',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.desc}</span>
+        <Badge color={p.type==='upfront'?'amber':p.type==='backend'?'teal':'blue'}>{p.type==='upfront'?'Upfront':p.type==='backend'?'Backend':'Merchant'}</Badge>
+        <span style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'600',color:'#0F6E56',whiteSpace:'nowrap'}}>{fmt$(p.amount)}</span>
+        <button style={{...BTN(true),padding:'5px 11px',fontSize:'12px',whiteSpace:'nowrap'}} onClick={e=>{e.stopPropagation();onConfirm();}}><CheckCircle size={12}/>Mark paid</button>
+      </div>
+      {open&&(
+        <div onClick={e=>e.stopPropagation()} style={{padding:'0 18px 12px 18px',background:'var(--color-background-secondary)'}}>
+          {call?(<>
+            <div style={{fontSize:'12px',color:'#0f172a',lineHeight:1.7,padding:'10px 0'}}>
+              {call.offerDetails&&<div><span style={{color:'#64748b'}}>Discount: </span>{call.offerDetails}</div>}
+              <div><span style={{color:'#64748b'}}>Contact: </span>{[call.contact,call.phone,call.email].filter(Boolean).join(' · ')||'—'}</div>
+              {call.group&&<div><span style={{color:'#64748b'}}>Group: </span>{call.group}</div>}
+            </div>
+            {rec&&<button style={BTN(false)} onClick={play} disabled={busy}><Play size={13}/>{busy?'Loading…':url?'Hide recording':'Play recording'}</button>}
+            {err&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'8px'}}>{err}</div>}
+            {url&&(rec?.mediaMode==='audio'
+              ? <audio src={url} controls style={{width:'100%',margin:'10px 0 0'}}/>
+              : <video src={url} controls style={{width:'100%',maxWidth:'400px',borderRadius:'var(--border-radius-md)',margin:'10px 0 0',display:'block'}}/>)}
+            {call.agreementId&&<AgreementPdfButton agreementId={call.agreementId}/>}
+          </>):(
+            <div style={{fontSize:'12px',color:'#64748b',padding:'10px 0'}}>No call record linked to this payment — it came from a CSV import or a manual period.</div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PaymentQueue({employees,deals,assignments,calls=[],onMarkDealPaid,onMarkPeriodPaid}) {
+  const [openId,setOpenId]=useState('');
   const allPending=[];
   employees.forEach(emp=>{
     getPayments(emp.id,deals,assignments).filter(p=>!p.paid).forEach(p=>{
@@ -572,16 +613,7 @@ function PaymentQueue({employees,deals,assignments,onMarkDealPaid,onMarkPeriodPa
                   <div style={{flex:1}}><div style={{fontWeight:'500'}}>{name}</div><div style={{fontSize:'12px',color:'var(--color-text-secondary)'}}>{pmts.length} pending payment{pmts.length!==1?'s':''}</div></div>
                   <Badge color="amber">{fmt$(empTotal)} owed</Badge>
                 </div>
-                {pmts.map(p=>(
-                  <div key={p.id} style={{display:'grid',gridTemplateColumns:'auto 1fr auto auto',gap:'14px',alignItems:'center',padding:'12px 18px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
-                    <div style={{fontSize:'12px',color:'var(--color-text-secondary)',whiteSpace:'nowrap'}}>{fmtDate(p.date)}</div>
-                    <div><div style={{fontSize:'13px',marginBottom:'3px'}}>{p.desc}</div><Badge color={p.type==='upfront'?'amber':p.type==='backend'?'teal':'blue'}>{p.type==='upfront'?'Deal upfront':p.type==='backend'?'Deal backend':'Merchant'}</Badge></div>
-                    <div style={{fontFamily:'var(--font-mono)',fontSize:'15px',fontWeight:'500',color:'#0F6E56',whiteSpace:'nowrap'}}>{fmt$(p.amount)}</div>
-                    <button style={{...BTN(true),padding:'6px 12px',fontSize:'12px',whiteSpace:'nowrap'}} onClick={()=>confirm(p)}>
-                      <CheckCircle size={13}/>Mark paid
-                    </button>
-                  </div>
-                ))}
+                {pmts.map(p=><PaymentRow key={p.id} p={p} calls={calls} open={openId===p.id} onToggle={()=>setOpenId(openId===p.id?'':p.id)} onConfirm={()=>confirm(p)}/>)}
               </div>
             );
           })}
@@ -3609,6 +3641,7 @@ export default function TailgatePayday() {
   const [session,setSession]=useState(null);
   const [authLoading,setAuthLoading]=useState(true);
   const [tab,setTab]=useState('employees');
+  const [paySub,setPaySub]=useState('queue');
   const [employees,setEmployees]=useState([]);
   const [deals,setDeals]=useState([]);
   const [assignments,setAssignments]=useState([]);
@@ -3838,36 +3871,48 @@ export default function TailgatePayday() {
   if(!isAdmin) return <EmployeePortal employees={employees} deals={deals} assignments={assignments} calls={calls} orgs={orgs} groups={groups} timeclock={timeclock} userEmail={userEmail} onSignOut={signOut} onUpdateCall={updateCall} onAddRecordingTake={addRecordingTake} onRequestAccess={requestAccess} onSetMyPhone={setEmployeePhone} onClockToggle={clockToggle} onAddLead={addCallerLead}
     events={events} onLogCallOpen={onLogCallOpen} onCallPlaced={onCallPlaced} onCallLogged={onCallLogged}/>;
 
-  const TABS=[['employees','Employees',Users],['orgs','Organizations',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['groups','Groups',Users],['discounts','Discounts',MapPin],['analytics','Analytics',Clock],['payments','Payments',CheckCircle],['payroll','Payroll',DollarSign]];
+  const TABS=[['employees','Employees',Users],['orgs','Organizations',Building2],['reps','Merchant Reps',DollarSign],['calls','Calls',Phone],['groups','Groups',Users],['discounts','Discounts',MapPin],['analytics','Analytics',Clock],['payments','Payments',DollarSign]];
+  const ADD_LABEL={employees:'Employee',orgs:'Organization',calls:'Add lead',reps:'Period'};
 
   return (
-    <div style={{padding:'20px',maxWidth:'980px',margin:'0 auto',fontFamily:'var(--font-sans)'}}>
+    <div style={{padding:'20px',maxWidth:'1100px',margin:'0 auto',fontFamily:'var(--font-sans)'}}>
       <h2 className="sr-only">Tailgate Payday — Payout management</h2>
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'22px'}}>
-        <div style={{display:'flex',alignItems:'center',gap:'9px'}}><span style={{fontSize:'17px',fontWeight:'500'}}>Tailgate Payday</span></div>
-        <div style={{display:'flex',background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'3px',border:'0.5px solid var(--color-border-tertiary)',gap:'2px'}}>
-          {TABS.map(([key,label,Icon])=>(
-            <button key={key} onClick={()=>setTab(key)} style={{display:'inline-flex',alignItems:'center',gap:'5px',padding:'6px 13px',borderRadius:'var(--border-radius-md)',border:'none',cursor:'pointer',fontSize:'13px',fontFamily:'var(--font-sans)',fontWeight:'500',background:tab===key?'var(--color-background-primary)':'transparent',color:tab===key?'var(--color-text-primary)':'var(--color-text-secondary)',boxShadow:tab===key?'0 0.5px 2px rgba(0,0,0,0.1)':'none'}}>
-              <Icon size={13}/>{label}
-            </button>
-          ))}
-        </div>
+      {/* Brand + actions on top, tabs on their own full-width row so they never squash */}
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'12px',marginBottom:'12px'}}>
+        <span style={{fontSize:'17px',fontWeight:'600'}}>Tailgate Payday</span>
         <div style={{display:'flex',gap:'8px',alignItems:'center'}}>
-          {['employees','orgs','reps','calls'].includes(tab)&&(
+          {ADD_LABEL[tab]&&(
             <button style={BTN(true)} onClick={()=>setModal({type:tab==='employees'?'addEmp':tab==='orgs'?'addOrg':tab==='calls'?'addCall':'addPeriod'})}>
-              <Plus size={14}/>{tab==='employees'?'Employee':tab==='orgs'?'Organization':tab==='calls'?'Assign call':'Period'}
+              <Plus size={14}/>{ADD_LABEL[tab]}
             </button>
           )}
           <button style={{...BTN(false),padding:'7px 10px'}} onClick={exportAll} title="Export a backup"><Download size={14}/></button>
           <button style={{...BTN(false),padding:'7px 10px'}} onClick={signOut} title="Sign out"><LogOut size={14}/></button>
         </div>
       </div>
+      <div style={{display:'flex',flexWrap:'wrap',background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'3px',border:'0.5px solid var(--color-border-tertiary)',gap:'2px',marginBottom:'20px'}}>
+        {TABS.map(([key,label,Icon])=>(
+          <button key={key} onClick={()=>setTab(key)} style={{display:'inline-flex',alignItems:'center',gap:'5px',padding:'7px 14px',borderRadius:'var(--border-radius-md)',border:'none',cursor:'pointer',fontSize:'13px',fontFamily:'var(--font-sans)',fontWeight:'500',background:tab===key?'var(--color-background-primary)':'transparent',color:tab===key?'var(--color-text-primary)':'var(--color-text-secondary)',boxShadow:tab===key?'0 0.5px 2px rgba(0,0,0,0.1)':'none',whiteSpace:'nowrap'}}>
+            <Icon size={13}/>{label}
+          </button>
+        ))}
+      </div>
 
       {tab==='employees'&&<EmployeesView employees={employees} deals={deals} assignments={assignments} signups={signups} onAdd={()=>setModal({type:'addEmp'})} onAddRequest={email=>setModal({type:'addEmp',data:{email}})} onDismissRequest={dismissSignup} onDelete={deleteEmployee} onSetPhone={setEmployeePhone} onUpdateEmployee={updateEmployee}/>}
       {tab==='orgs'&&<OrgsView orgs={orgs} onAdd={()=>setModal({type:'addOrg'})} onDelete={deleteOrg}/>}
       {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onImportCSV={()=>setModal({type:'importCSV'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
-      {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
-      {tab==='payroll'&&<PayrollView employees={employees} deals={deals} assignments={assignments}/>}
+      {tab==='payments'&&(
+        <div>
+          <div style={{display:'flex',gap:'2px',background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'3px',border:'0.5px solid var(--color-border-tertiary)',width:'fit-content',marginBottom:'16px'}}>
+            {[['queue','To pay'],['sheets','Pay sheets']].map(([k,l])=>(
+              <button key={k} onClick={()=>setPaySub(k)} style={{padding:'6px 16px',borderRadius:'var(--border-radius-md)',border:'none',cursor:'pointer',fontSize:'13px',fontFamily:'var(--font-sans)',fontWeight:'500',background:paySub===k?'var(--color-background-primary)':'transparent',color:paySub===k?'var(--color-text-primary)':'var(--color-text-secondary)',boxShadow:paySub===k?'0 0.5px 2px rgba(0,0,0,0.1)':'none'}}>{l}</button>
+            ))}
+          </div>
+          {paySub==='queue'
+            ? <PaymentQueue employees={employees} deals={deals} assignments={assignments} calls={calls} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>
+            : <PayrollView employees={employees} deals={deals} assignments={assignments}/>}
+        </div>
+      )}
       {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} groups={groups} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})} onEditGroup={(groupKey,data)=>setModal({type:'editGroup',data:{groupKey,...data}})} onCallAgain={callAgainNow} onEdit={c=>setModal({type:'editLead',data:c})}/>}
       {tab==='groups'&&<AdminGroupsView groups={groups} calls={calls} onAdd={()=>setModal({type:'groupMeta'})} onEdit={g=>setModal({type:'groupMeta',data:g})} onDelete={deleteGroupMeta} onToggleActive={toggleGroupActive}/>}
       {tab==='discounts'&&<AdminDiscountsView employees={employees} calls={calls}/>}
