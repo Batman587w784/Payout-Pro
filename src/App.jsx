@@ -377,12 +377,12 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],timecl
           ))}
         </div>
 
-        {screen==='home'&&<CallerHome myCalls={myCalls} onOpenLog={openLog} groupDefs={groups} canAddLead={!!emp.canAddLeads} onAddLead={onAddLead?(rec=>onAddLead(emp.id,rec)):null} stats={myStats}/>}
+        {screen==='home'&&<CallerHome myCalls={myCalls} onOpenLog={openLog} groupDefs={groups} canAddLead={!!emp.canAddLeads} onAddLead={onAddLead?(rec=>onAddLead(emp.id,rec)):null} stats={myStats} verbalOnly={!!emp.noForms}/>}
         {screen==='crm'&&<CallerCRM myCalls={myCalls} onOpenLog={openLog} onWorkQueue={()=>setScreen('home')}/>}
         {screen==='agreements'&&<CallerAgreements/>}
         {screen==='payouts'&&<CallerPayouts emp={emp} deals={deals} assignments={assignments}/>}
       </div>
-      {logCall&&<LogCallModal call={logCall} callerName={emp.name} callerEmail={emp.email} myCallerId={emp.id} orgs={orgs} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake}
+      {logCall&&<LogCallModal call={logCall} callerName={emp.name} callerEmail={emp.email} myCallerId={emp.id} orgs={orgs} verbalOnly={!!emp.noForms} onUpdateCall={onUpdateCall} onAddRecordingTake={onAddRecordingTake}
         onCalled={id=>onCallPlaced&&onCallPlaced(emp.id,id)} onLogged={(id,outcome,dialed)=>onCallLogged&&onCallLogged(emp.id,id,outcome,dialed)} onClose={()=>setLogId('')}/>}
     </div>
   );
@@ -650,14 +650,20 @@ function EmployeesView({employees,deals,assignments,signups=[],onAdd,onAddReques
                   <button onClick={()=>onDelete(emp.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}}><Trash2 size={12}/></button>
                 </div>
                 <HR/>
-                {onUpdateEmployee&&(
-                  <div onClick={()=>onUpdateEmployee(emp.id,{canAddLeads:!emp.canAddLeads})} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'8px',cursor:'pointer',padding:'8px 0',marginBottom:'4px'}}>
+                {onUpdateEmployee&&(<>
+                  <div onClick={()=>onUpdateEmployee(emp.id,{canAddLeads:!emp.canAddLeads})} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'8px',cursor:'pointer',padding:'8px 0'}}>
                     <div style={{minWidth:0}}><div style={{fontSize:'12px',fontWeight:'600'}}>Can add their own leads</div><div style={{fontSize:'11px',color:'var(--color-text-secondary)'}}>Lets this caller add new merchants themselves</div></div>
                     <div style={{width:'38px',height:'22px',borderRadius:'100px',background:emp.canAddLeads?'#1D9E75':'#cbd5e1',position:'relative',flexShrink:0,transition:'background 0.15s'}}>
                       <div style={{width:'18px',height:'18px',borderRadius:'50%',background:'#fff',position:'absolute',top:'2px',left:emp.canAddLeads?'18px':'2px',transition:'left 0.15s',boxShadow:'0 1px 2px rgba(0,0,0,0.2)'}}/>
                     </div>
                   </div>
-                )}
+                  <div onClick={()=>onUpdateEmployee(emp.id,{noForms:!emp.noForms})} style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:'8px',cursor:'pointer',padding:'8px 0',marginBottom:'4px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+                    <div style={{minWidth:0}}><div style={{fontSize:'12px',fontWeight:'600'}}>Can send agreements (forms)</div><div style={{fontSize:'11px',color:emp.noForms?'#854F0B':'var(--color-text-secondary)'}}>{emp.noForms?'OFF — verbal recordings only':'Can text/email the e-sign form'}</div></div>
+                    <div style={{width:'38px',height:'22px',borderRadius:'100px',background:!emp.noForms?'#1D9E75':'#cbd5e1',position:'relative',flexShrink:0,transition:'background 0.15s'}}>
+                      <div style={{width:'18px',height:'18px',borderRadius:'50%',background:'#fff',position:'absolute',top:'2px',left:!emp.noForms?'18px':'2px',transition:'left 0.15s',boxShadow:'0 1px 2px rgba(0,0,0,0.2)'}}/>
+                    </div>
+                  </div>
+                </>)}
                 <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:'8px'}}>
                   <div><div style={{fontSize:'11px',color:'var(--color-text-secondary)',marginBottom:'2px'}}>Total earned</div><div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500'}}>{fmt$(s.total)}</div></div>
                   <div><div style={{fontSize:'11px',color:'var(--color-text-secondary)',marginBottom:'2px'}}>Outstanding</div><div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:'#854F0B'}}>{fmt$(s.pending)}</div></div>
@@ -1414,7 +1420,7 @@ const NoteField = ({note,setNote}) => (
 );
 
 const CALL_WINDOW_SECS = 10; // how long the "dial now" countdown runs before outcomes unlock
-function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUpdateCall, onAddRecordingTake, onCalled, onLogged, onClose }) {
+function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], verbalOnly=false, onUpdateCall, onAddRecordingTake, onCalled, onLogged, onClose }) {
   const dialPhone=toE164(call.phone||'')||call.phone||'';
   const [callStarted,setCallStarted]=useState(false);
   const [secsLeft,setSecsLeft]=useState(CALL_WINDOW_SECS);
@@ -1539,6 +1545,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     return data.id;
   };
   const startForm=async()=>{
+    if(verbalOnly){ setAgreementErr('Your account is set to verbal only — record the confirmation instead.'); return; }
     if(!hasOffer){ setAgreementErr('Enter the discount details (what they agreed to) above before continuing.'); return; }
     if(agreementId){ setFormPhase('send'); return; } // reuse the draft; don't create a second
     setCreatingAgr(true); setAgreementErr('');
@@ -1549,6 +1556,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
   // Phase 3.1: create/send the agreement for a "needs more info" lead with the discount left blank.
   // Uses its OWN id (niAgreementId) so it can never reuse the completed-form agreement's discount snapshot.
   const startNeedsInfoAgreement=async()=>{
+    if(verbalOnly){ setAgreementErr('Your account is set to verbal only — you can’t send agreements.'); return; }
     if(niAgreementId){ setNiAgreement(true); return; }
     setCreatingAgr(true); setAgreementErr('');
     try{ const id=await createAgreement(); setNiAgreementId(id); setNiAgreement(true); }
@@ -1556,6 +1564,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
     finally{ setCreatingAgr(false); }
   };
   const saveFormCompleted=()=>{
+    if(verbalOnly) return; // forms are off for this caller — a recording is the only proof they can submit
     if(!hasOffer||!hasEmail) return; // discount details + merchant email are required
     const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
     commit({ status:'completed', verifyStatus:'pending', agreementId, decisionMaker:dm, spokeTo, email, phone,
@@ -1629,6 +1638,15 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
 
   return (
     <ModalWrap title={`Log call — ${call.business}`} onClose={onClose} wide maxWidth="1060px">
+      {verbalOnly&&(
+        <div style={{display:'flex',alignItems:'center',gap:'12px',padding:'14px 16px',marginBottom:'16px',borderRadius:'var(--border-radius-lg)',background:'#FAEEDA',border:'2px solid #EF9F27'}}>
+          <Video size={24} style={{flexShrink:0,color:'#854F0B'}}/>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:'15px',fontWeight:'800',color:'#854F0B'}}>VERBAL ONLY — you must record this confirmation</div>
+            <div style={{fontSize:'12.5px',color:'#92722f',lineHeight:1.5}}>Sending agreement forms is turned off for your account. Before you dial, know that the <b>only</b> way to complete this is a recorded verbal confirmation on the call.</div>
+          </div>
+        </div>
+      )}
       {/* Lead profile — name + address on the left, school/group top-right */}
       <div style={{...CARD,background:'var(--color-background-secondary)',padding:'16px',marginBottom:'16px'}}>
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:'16px'}}>
@@ -1713,15 +1731,23 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
 
       {(outcome===null||outcome==='completed')&&(
         <div style={{...CARD,padding:'16px',marginBottom:'16px'}}>
-          <div style={{fontSize:'13.5px',lineHeight:1.6,color:'#0f172a',background:'var(--color-background-secondary)',borderLeft:'3px solid #1D9E75',borderRadius:'8px',padding:'12px 14px',marginBottom:'14px'}}>Great — would you prefer we confirm this by a quick <b>form</b> I text or email you, or a <b>verbal</b> confirmation right now?</div>
-          {/* Form / Verbal choice — always here; the line above is the rep's script */}
-          <div style={{display:'flex',gap:'10px',marginBottom:'14px'}}>
-            <button style={{...BTN(completeMode==='form'),flex:1,justifyContent:'center'}} onClick={()=>{setOutcome('completed');setCompleteMode('form');}}><FileText size={14}/>Send agreement (form)</button>
-            <button style={{...BTN(completeMode==='verbal'),flex:1,justifyContent:'center'}} onClick={()=>{setOutcome('completed');setCompleteMode('verbal');}}><Video size={14}/>Verbal — record</button>
+          <div style={{fontSize:'13.5px',lineHeight:1.6,color:'#0f172a',background:'var(--color-background-secondary)',borderLeft:'3px solid #1D9E75',borderRadius:'8px',padding:'12px 14px',marginBottom:'14px'}}>
+            {verbalOnly
+              ? <>Great — I just need to get your <b>verbal confirmation recorded</b> right now, it only takes a minute.</>
+              : <>Great — would you prefer we confirm this by a quick <b>form</b> I text or email you, or a <b>verbal</b> confirmation right now?</>}
           </div>
+          {/* Form / Verbal choice — forms are hidden entirely for verbal-only callers */}
+          {verbalOnly?(
+            <button style={{...BTN(completeMode==='verbal'),width:'100%',justifyContent:'center',marginBottom:'14px'}} onClick={()=>{setOutcome('completed');setCompleteMode('verbal');}}><Video size={14}/>Verbal — record the confirmation</button>
+          ):(
+            <div style={{display:'flex',gap:'10px',marginBottom:'14px'}}>
+              <button style={{...BTN(completeMode==='form'),flex:1,justifyContent:'center'}} onClick={()=>{setOutcome('completed');setCompleteMode('form');}}><FileText size={14}/>Send agreement (form)</button>
+              <button style={{...BTN(completeMode==='verbal'),flex:1,justifyContent:'center'}} onClick={()=>{setOutcome('completed');setCompleteMode('verbal');}}><Video size={14}/>Verbal — record</button>
+            </div>
+          )}
 
           {completeMode===null&&(
-            <div style={{fontSize:'13px',color:'#64748b',padding:'2px'}}>Pick <b>form</b> or <b>verbal</b> above once they decide.</div>
+            <div style={{fontSize:'13px',color:'#64748b',padding:'2px'}}>{verbalOnly?<>Tap <b>Verbal</b> above and record the confirmation.</>:<>Pick <b>form</b> or <b>verbal</b> above once they decide.</>}</div>
           )}
 
           {completeMode==='form'&&(formPhase==='details'?(
@@ -1785,6 +1811,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
               <div style={{fontSize:'13px',color:'#854F0B',marginBottom:'12px'}}>Add their email in the details above to send them the info.</div>
             )}
           </div>
+          {!verbalOnly&&(
           <div style={{borderTop:'0.5px solid var(--color-border-tertiary)',marginTop:'8px',paddingTop:'14px'}}>
             <div style={{fontSize:'12px',fontWeight:'600',color:'#0F6E56',marginBottom:'4px'}}>Or send the agreement now — they fill in their own discount</div>
             <div style={{fontSize:'12px',color:'#64748b',marginBottom:'10px'}}>Same signing flow as a completed call, but the discount is left blank for the merchant to enter when they’re ready.</div>
@@ -1795,6 +1822,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], onUp
             )}
             {agreementErr&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'8px'}}>{agreementErr}</div>}
           </div>
+          )}
           {emailTo&&!emailed&&<div style={{fontSize:'12px',color:'#854F0B',margin:'12px 0 8px',fontWeight:'500'}}>Send the info email (or the agreement) above before you save.</div>}
           <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'12px'}} onClick={save}>Save &amp; follow up tomorrow</button>
         </div>
@@ -1968,7 +1996,7 @@ function CallerAddLeadModal({ groupNames=[], onSave, onClose }) {
   );
 }
 
-function CallerHome({ myCalls, onOpenLog, groupDefs=[], canAddLead=false, onAddLead=null, stats=null }) {
+function CallerHome({ myCalls, onOpenLog, groupDefs=[], canAddLead=false, onAddLead=null, stats=null, verbalOnly=false }) {
   const [showScript,setShowScript]=useState(false);
   const [showAddLead,setShowAddLead]=useState(false);
   const [area,setArea]=useState('all');
@@ -2023,6 +2051,15 @@ function CallerHome({ myCalls, onOpenLog, groupDefs=[], canAddLead=false, onAddL
           </div>
           {fVis.map(c=><LeadRow key={c.id} c={c} onOpenLog={onOpenLog}/>)}
           {fRem>0&&<div style={{padding:'14px 18px',textAlign:'center'}}><button style={BTN(false)} onClick={()=>setShownF(s=>s+LEAD_BATCH)}>{fRem} more — Show {Math.min(LEAD_BATCH,fRem)}</button></div>}
+        </div>
+      )}
+      {verbalOnly&&(
+        <div style={{display:'flex',alignItems:'center',gap:'12px',padding:'13px 16px',marginBottom:'14px',borderRadius:'var(--border-radius-lg)',background:'#FAEEDA',border:'2px solid #EF9F27'}}>
+          <Video size={22} style={{flexShrink:0,color:'#854F0B'}}/>
+          <div style={{minWidth:0}}>
+            <div style={{fontSize:'14px',fontWeight:'800',color:'#854F0B'}}>VERBAL ONLY — every discount needs a recording</div>
+            <div style={{fontSize:'12px',color:'#92722f'}}>Agreement forms are turned off for your account. Plan to record the confirmation on the call.</div>
+          </div>
         </div>
       )}
       {stats&&(
