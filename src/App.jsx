@@ -1133,20 +1133,37 @@ const callbackWhen = c => {
     : (c.availability&&c.availability!=='anytime' ? (AVAIL_LABEL[c.availability]||c.availability) : (c.callbackTime||''));
   return `${fmtDate(c.callbackDate)}${slots?` · ${slots}`:''}`;
 };
-// Estimated best window to reach a manager, by business type (when they open + when a GM tends to be in).
-const GM_WINDOW = {
-  'Fast food':{slots:['09:00','10:00','14:00','15:00'],note:'Managers are usually in mid-morning and mid-afternoon, between rushes.'},
-  'Pizza':{slots:['10:00','11:00','14:00','15:00'],note:'Late morning or between lunch and dinner is your best shot.'},
-  'Casual dining':{slots:['10:00','11:00','14:00','15:00'],note:'GMs open the store mid-morning; it’s quiet again 2–4 PM.'},
-  'Bakery/coffee shop':{slots:['07:00','08:00','09:00'],note:'Owners are in early — catch them before the morning rush.'},
-  'Healthy':{slots:['10:00','11:00','14:00','15:00'],note:'Try mid-morning or the afternoon lull.'},
-  'Ethnic':{slots:['10:00','11:00','14:00','15:00'],note:'Late morning or mid-afternoon, between services.'},
-  'International':{slots:['10:00','11:00','14:00','15:00'],note:'Late morning or mid-afternoon, between services.'},
-  'Food truck':{slots:['10:00','11:00'],note:'Reach them during prep, before the lunch window.'},
-  'High-end':{slots:['14:00','15:00','16:00'],note:'Dinner-focused — the GM is usually in mid-afternoon before service.'},
-  'Nightlife':{slots:['15:00','16:00','17:00'],note:'Afternoon, before they open for the night.'},
+// Per-business-type playbook: when they're typically open, when a manager is reachable,
+// when NOT to call, and the discounts that tend to work for that kind of business.
+const RESTAURANT_DISCOUNTS = {
+  best:['Buy one, get one free','Free item with purchase'],
+  also:['15% off','Free drink','Free appetizer'],
 };
-const gmWindow = type => GM_WINDOW[type] || {slots:['10:00','11:00','14:00','15:00'],note:'Managers are most reachable mid-morning and mid-afternoon, between rushes.'};
+const BAR_DISCOUNTS = {
+  best:['Buy 4 drinks, get the 5th free','15% off any purchase','20% off food only'],
+  also:['Buy one get one free draft (weeknights)','Free skip-the-line pass'],
+};
+const BIZ_PROFILE = {
+  'Fast food':{open:'Usually 6 AM – 10 PM, 7 days',slots:['09:00','10:00','14:00','15:00'],note:'Managers are usually in mid-morning and mid-afternoon, between rushes.',avoid:'Skip 11:30 AM–1:30 PM and 5–7 PM — they’re slammed.',...RESTAURANT_DISCOUNTS},
+  'Pizza':{open:'Usually 11 AM – 10 PM (later Fri/Sat)',slots:['10:00','11:00','14:00','15:00'],note:'Late morning or between lunch and dinner is your best shot.',avoid:'Never during dinner — 5–9 PM is their whole day.',...RESTAURANT_DISCOUNTS},
+  'Casual dining':{open:'Usually 11 AM – 10 PM',slots:['10:00','11:00','14:00','15:00'],note:'GMs open the store mid-morning; it’s quiet again 2–4 PM.',avoid:'Avoid the lunch rush (11:30–1:30) and dinner (5–8 PM).',...RESTAURANT_DISCOUNTS},
+  'Bakery/coffee shop':{open:'Usually 6 AM – 2 PM',slots:['07:00','08:00','09:00'],note:'Owners are in early — catch them before the morning rush.',avoid:'Don’t call 7:30–9:30 AM (morning rush) or after they close ~2 PM.',best:['Free pastry with any drink','Buy one coffee, get one free'],also:['15% off any purchase','$2 off any breakfast item']},
+  'Healthy':{open:'Usually 10 AM – 9 PM',slots:['10:00','11:00','14:00','15:00'],note:'Try mid-morning or the afternoon lull.',avoid:'Avoid the lunch rush (11:30–1:30).',...RESTAURANT_DISCOUNTS},
+  'Ethnic':{open:'Usually 11 AM – 9 PM',slots:['10:00','11:00','14:00','15:00'],note:'Late morning or mid-afternoon, between services.',avoid:'Avoid lunch (11:30–1:30) and dinner (5–8 PM).',...RESTAURANT_DISCOUNTS},
+  'International':{open:'Usually 11 AM – 9 PM',slots:['10:00','11:00','14:00','15:00'],note:'Late morning or mid-afternoon, between services.',avoid:'Avoid lunch (11:30–1:30) and dinner (5–8 PM).',...RESTAURANT_DISCOUNTS},
+  'Food truck':{open:'Usually a lunch and/or dinner window only',slots:['10:00','11:00'],note:'Reach them during prep, before the lunch window.',avoid:'Never while they’re parked and serving — they’re a one-person show.',best:['Free side with any entrée','Buy one, get one free'],also:['$2 off any order','10% off']},
+  'High-end':{open:'Usually dinner only, 5 PM – 10 PM',slots:['14:00','15:00','16:00'],note:'Dinner-focused — the GM is usually in mid-afternoon before service.',avoid:'Never after 4:30 PM — they’re in service prep, then service.',best:['Free appetizer with two entrées','Complimentary dessert'],also:['15% off food','Free glass of wine with dinner']},
+  'Nightlife':{open:'Usually 4 PM – 2 AM',slots:['14:00','15:00','16:00'],note:'Mid-afternoon, after they open and before the evening crowd.',avoid:'Don’t call after 7 PM, and never on a weekend night.',...BAR_DISCOUNTS},
+  'Bar / pub':{open:'Usually 11 AM or 4 PM – 2 AM',slots:['14:00','15:00','16:00'],note:'Mid-afternoon, after they open and before the evening crowd.',avoid:'Don’t call after 7 PM, and never on a weekend night.',...BAR_DISCOUNTS},
+  'Auto / oil change':{open:'Usually 7 AM – 6 PM, Mon–Sat',slots:['09:00','10:00','14:00'],note:'Mid-morning or early afternoon, between service waves.',avoid:'Avoid 8–9 AM drop-off and 5–6 PM pickup.',best:['$25 off an oil change','$20 off any service over $100'],also:['Free tire rotation with an oil change','10% off any service','Free multi-point inspection']},
+  'Car wash':{open:'Usually 8 AM – 7 PM',slots:['10:00','11:00','14:00'],note:'Mid-morning or mid-afternoon on a dry day.',avoid:'Skip weekends and the first sunny day after rain — that’s their rush.',best:['Free upgrade to the next wash tier','$5 off any wash'],also:['Buy 4 washes, get the 5th free','Free interior vacuum with any wash']},
+  'Retail / boutique':{open:'Usually 10 AM – 7 PM',slots:['10:00','11:00','14:00','15:00'],note:'Right after they open, or the mid-afternoon lull.',avoid:'Avoid Saturday afternoons and the hour before close.',best:['15% off any purchase','$10 off $50 or more'],also:['Buy one, get one 50% off','Free gift with purchase']},
+  'Salon / barber':{open:'Usually 9 AM – 7 PM, closed Mon',slots:['10:00','11:00','14:00'],note:'Between appointments — mid-morning or early afternoon.',avoid:'Avoid Fri/Sat entirely — fully booked.',best:['$10 off any service','20% off your first visit'],also:['Free add-on service','Buy 5 cuts, get the 6th free']},
+  'Gym / fitness':{open:'Usually 5 AM – 10 PM',slots:['10:00','11:00','14:00'],note:'Mid-morning or early afternoon, between the rushes.',avoid:'Avoid 6–9 AM and 4–7 PM — peak floor hours.',best:['Free one-week trial','$25 off the first month'],also:['Waived enrollment fee','Free personal-training session']},
+};
+const DEFAULT_PROFILE = {open:'Hours vary',slots:['10:00','11:00','14:00','15:00'],note:'Managers are most reachable mid-morning and mid-afternoon, between rushes.',avoid:'Avoid the lunch rush (11:30 AM–1:30 PM) and dinner (5–8 PM).',...RESTAURANT_DISCOUNTS};
+const bizProfile = type => BIZ_PROFILE[type] || DEFAULT_PROFILE;
+const gmWindow = type => bizProfile(type);
 // Filesystem-safe slug for organizing recordings in the storage bucket
 const slug = s => (s||'').toString().toLowerCase().trim().replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,40) || 'x';
 const REC_MAX_SEC = 15 * 60;        // auto-stop recordings at 15 minutes
@@ -1348,7 +1365,7 @@ const OUTCOMES = [
   ['not_interested','Not interested', 'red',   'Keep their info',         XCircle],
 ];
 // Standardized business-type / category options
-const BUSINESS_TYPES = ['Fast food','Pizza','Casual dining','Bakery/coffee shop','Healthy','Ethnic','International','Food truck','High-end','Nightlife','Other'];
+const BUSINESS_TYPES = ['Fast food','Pizza','Casual dining','Bakery/coffee shop','Healthy','Ethnic','International','Food truck','High-end','Bar / pub','Nightlife','Auto / oil change','Car wash','Retail / boutique','Salon / barber','Gym / fitness','Other'];
 
 // What a call is worth (caller payout) — $5 to $75 in $5 steps
 const PAYOUT_AMOUNTS = Array.from({length:15},(_,i)=>(i+1)*5);
@@ -1630,6 +1647,17 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], verb
         ))}
         <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px',marginBottom:'12px'}} onClick={addAddr}><Plus size={12}/>Add location</button>
         <Field label={<span>Offer / discount details — what they agreed to <span style={{color:'#A32D2D'}}>*required</span></span>}><textarea style={{...INP,minHeight:'70px',resize:'vertical',...(outcome==='completed'&&!hasOffer?{borderColor:'#F09595'}:{})}} value={offerDetails} onChange={e=>setOfferDetails(e.target.value)} placeholder="e.g. 15% off any purchase over $25, excludes alcohol"/></Field>
+        {(()=>{ const bp=bizProfile(businessType||call.businessType||call.category);
+          return (
+          <div style={{marginTop:'-6px',marginBottom:'12px'}}>
+            <div style={{fontSize:'11px',color:'#64748b',marginBottom:'5px'}}>Pitch these — tap to fill. <b style={{color:'#0F6E56'}}>Best performing</b> first:</div>
+            <div style={{display:'flex',flexWrap:'wrap',gap:'5px'}}>
+              {bp.best.map(d=><button key={d} type="button" onClick={()=>setOfferDetails(d)} style={{padding:'4px 10px',fontSize:'11.5px',fontWeight:'600',cursor:'pointer',fontFamily:'var(--font-sans)',borderRadius:'100px',border:'1px solid #5DCAA5',background:'#E1F5EE',color:'#0F6E56'}}>{d}</button>)}
+              {bp.also.map(d=><button key={d} type="button" onClick={()=>setOfferDetails(d)} style={{padding:'4px 10px',fontSize:'11.5px',cursor:'pointer',fontFamily:'var(--font-sans)',borderRadius:'100px',border:'0.5px solid var(--color-border-secondary)',background:'var(--color-background-primary)',color:'#0f172a'}}>{d}</button>)}
+            </div>
+          </div>
+          );
+        })()}
         {outcome==='completed'&&!hasOffer&&<div style={{fontSize:'12px',color:'#A32D2D',marginTop:'-6px',marginBottom:'12px',fontWeight:'500'}}>Enter the exact discount they agreed to — this is required to complete the call.</div>}
         <NoteField note={note} setNote={setNote}/>
       </div>
@@ -1710,6 +1738,19 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], verb
       ):(
         <div style={{padding:'10px 14px',marginBottom:'16px',borderRadius:'var(--border-radius-md)',background:'#FAEEDA',border:'0.5px solid #EF9F27',fontSize:'12px',color:'#854F0B',fontWeight:'500'}}>No phone number on this lead — add one in the details below so it can be dialed.</div>
       )}
+
+      {/* Timing playbook for this kind of business — read before you dial */}
+      {(()=>{ const bp=bizProfile(businessType||call.businessType||call.category); const known=!!BIZ_PROFILE[businessType||call.businessType||call.category];
+        return (
+        <div style={{display:'flex',flexWrap:'wrap',gap:'8px 20px',padding:'10px 14px',marginBottom:'16px',borderRadius:'var(--border-radius-md)',background:'var(--color-background-info)',border:'0.5px solid var(--color-border-info)',fontSize:'12px',lineHeight:1.5}}>
+          <span style={{display:'inline-flex',alignItems:'center',gap:'5px',color:'#185FA5',fontWeight:'700'}}><Clock size={13}/>{known?(businessType||call.businessType||call.category):'Typical business'}</span>
+          <span style={{color:'#0f172a'}}><span style={{color:'#64748b'}}>Open: </span>{bp.open}</span>
+          <span style={{color:'#0F6E56',fontWeight:'600'}}>Best to call: {bp.slots.map(slotLabel).join(', ')}</span>
+          <span style={{color:'#A32D2D',fontWeight:'600'}}>Don’t call: {bp.avoid}</span>
+          {!known&&<span style={{color:'#854F0B'}}>Set their business type below for sharper timing.</span>}
+        </div>
+        );
+      })()}
 
       {/* Outcome buttons — the very first action */}
       <div style={{fontWeight:'600',fontSize:'16px',margin:'0 0 12px'}}>How did the call go?{locked&&<span style={{fontSize:'13px',fontWeight:'500',color:'#854F0B',marginLeft:'8px'}}>— dial first ({secsLeft}s)</span>}</div>
