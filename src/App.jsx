@@ -1481,6 +1481,20 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], verb
   const [completeMode,setCompleteMode]=useState(null); // null | 'form' | 'verbal'
   const [formPhase,setFormPhase]=useState('details');  // 'details' | 'send'
   const [agreementId,setAgreementId]=useState(null);
+  const [agrStatus,setAgrStatus]=useState('');
+  // Watch the agreement so "mark completed" can't be clicked until the merchant actually signs.
+  useEffect(()=>{
+    if(!agreementId) return;
+    let cancel=false;
+    const load=async()=>{ const {data}=await supabase.from('agreements').select('status').eq('id',agreementId).maybeSingle(); if(!cancel&&data) setAgrStatus(data.status||''); };
+    load();
+    const ch=supabase.channel(`agr-status:${agreementId}`)
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'agreements',filter:`id=eq.${agreementId}`},pl=>{ if(!cancel) setAgrStatus(pl.new?.status||''); })
+      .subscribe();
+    const iv=setInterval(load,8000); // fallback if realtime isn't flowing
+    return ()=>{ cancel=true; clearInterval(iv); supabase.removeChannel(ch); };
+  },[agreementId]);
+  const agrSigned=!!agreementId&&agrStatus==='signed';
   const [creatingAgr,setCreatingAgr]=useState(false);
   const [agreementErr,setAgreementErr]=useState('');
   const [niAgreement,setNiAgreement]=useState(false); // Phase 3.1: send the agreement with the discount left blank
@@ -1584,6 +1598,7 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], verb
   };
   const saveFormCompleted=()=>{
     if(verbalOnly) return; // forms are off for this caller — a recording is the only proof they can submit
+    if(!agreementId||!agrSigned) return; // the merchant must have actually signed the agreement we sent
     if(!hasOffer||!hasEmail) return; // discount details + merchant email are required
     const loc=addresses.map(addrLine).filter(Boolean).join(' | ');
     commit({ status:'completed', verifyStatus:'pending', agreementId, decisionMaker:dm, spokeTo, email, phone,
@@ -1806,8 +1821,15 @@ function LogCallModal({ call, callerName, callerEmail, myCallerId, orgs=[], verb
             <>
               <button style={{...BTN(false),marginBottom:'12px',padding:'5px 12px',fontSize:'12px'}} onClick={()=>setFormPhase('details')}><ArrowLeft size={13}/>Back to their details</button>
               <AgreementPanel initialStep="channel" agreementId={agreementId} businessName={businessName||call.business} defaultPhone={phone||call.phone||''} defaultEmail={emailTo||''} onBack={()=>setFormPhase('details')} onVerbal={()=>setCompleteMode('verbal')}/>
-              <button style={{...BTN(true),width:'100%',justifyContent:'center',marginTop:'12px'}} onClick={saveFormCompleted}><CheckCircle size={14}/>Save — mark completed</button>
-              <div style={{fontSize:'12px',color:'#64748b',marginTop:'8px',lineHeight:1.5}}>Once they sign (you’ll see it update above), mark this completed — the signed agreement is the record, no video needed.</div>
+              <div style={{display:'flex',alignItems:'center',gap:'7px',fontSize:'12px',fontWeight:'600',margin:'12px 0 8px',color:agrSigned?'#0F6E56':agrStatus==='viewed'?'#185FA5':agrStatus==='sent'?'#854F0B':'#A32D2D'}}>
+                {agrSigned?<CheckCircle size={14}/>:<AlertTriangle size={14}/>}
+                <span>{agrSigned?'Signed by the merchant — you can complete this now.'
+                  :agrStatus==='viewed'?'They opened it — waiting on the signature.'
+                  :agrStatus==='sent'?'Sent — waiting on them to open and sign it.'
+                  :'Not sent yet — send the agreement above.'}</span>
+              </div>
+              <button style={{...BTN(true),width:'100%',justifyContent:'center',opacity:agrSigned?1:0.5}} disabled={!agrSigned} onClick={saveFormCompleted}><CheckCircle size={14}/>{agrSigned?'Save — mark completed':'Waiting on their signature'}</button>
+              <div style={{fontSize:'12px',color:'#64748b',marginTop:'8px',lineHeight:1.5}}>This unlocks by itself the moment they sign — you don’t have to refresh. A form call can only be completed once the merchant has actually signed the agreement you sent.</div>
             </>
           ))}
 
@@ -2582,6 +2604,7 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
   const [sel,setSel]=useState(submitted);
   const [url,setUrl]=useState(''); const [loading,setLoading]=useState(false); const [err,setErr]=useState('');
   const [amt,setAmt]=useState(leadValue(call)||'');
+  const [open,setOpen]=useState(false);
   const load=async(rec)=>{
     setSel(rec); setLoading(true); setErr(''); setUrl('');
     try{ const {data,error}=await supabase.storage.from(CALL_BUCKET).createSignedUrl(rec.recordingPath,3600); if(error) throw error; setUrl(data.signedUrl); }
@@ -2592,12 +2615,20 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
   const dmName=call.decisionMaker?[call.decisionMaker.title,call.decisionMaker.firstName,call.decisionMaker.lastName].filter(Boolean).join(' '):'';
   const addr=call.addresses?.map(a=>[a.street,a.city,a.state].filter(Boolean).join(', ')).filter(Boolean).join(' • ');
   const amtNum=parseFloat(amt);
+  const proof=call.agreementId?'Signed agreement':submitted?`Recording${submitted.durationSec?' '+mmss(submitted.durationSec):''}`:'No proof';
   return (
-    <div style={{padding:'14px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-      <div style={{marginBottom:'10px'}}>
-        <div style={{fontWeight:'500',fontSize:'14px'}}>{call.business}</div>
-        <div style={{fontSize:'12px',color:'#64748b'}}>{callerName}{submitted?.durationSec?' · '+mmss(submitted.durationSec):''}{recs.length>1?` · ${recs.length} takes`:''}</div>
+    <div style={{borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
+      {/* Compact row — expand only when you're actually reviewing it */}
+      <div onClick={()=>setOpen(o=>!o)} style={{display:'grid',gridTemplateColumns:'1fr auto auto auto',gap:'10px',alignItems:'center',padding:'10px 18px',cursor:'pointer'}}>
+        <div style={{minWidth:0}}>
+          <div style={{fontSize:'13.5px',fontWeight:'500',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{call.business}</div>
+          <div style={{fontSize:'11.5px',color:'#64748b',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{callerName}{call.offerDetails?` · ${call.offerDetails}`:''}</div>
+        </div>
+        <Badge color={call.agreementId?'blue':submitted?'teal':'red'}>{proof}</Badge>
+        {leadValue(call)>0&&<span style={{fontFamily:'var(--font-mono)',fontSize:'12.5px',color:'#0F6E56'}}>${leadValue(call)}</span>}
+        <span style={{...BTN(!open),padding:'4px 10px',fontSize:'12px',whiteSpace:'nowrap'}}>{open?'Close':'Review'}</span>
       </div>
+      {open&&(<div style={{padding:'0 18px 14px 18px'}}>
       {(dmName||addr||call.offerDetails||call.email||call.phone)&&(
         <div style={{background:'var(--color-background-secondary)',borderRadius:'var(--border-radius-md)',padding:'10px 12px',fontSize:'12px',color:'#0f172a',marginBottom:'10px',lineHeight:1.6}}>
           {dmName&&<div><span style={{color:'#64748b'}}>Decision maker: </span>{dmName}</div>}
@@ -2632,6 +2663,7 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
           <button style={{...BTN(false),color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}} onClick={()=>onReject(call.id)}>Reject / redo</button>
         </div>
       </div>
+      </div>)}
     </div>
   );
 }
@@ -2973,11 +3005,16 @@ const leadCity  = c => { const ci=(c.addresses?.[0]?.city||'').trim(); if(ci) re
 
 const leadGroup = (c,by) => by==='city'?leadCity(c):by==='school'?(c.school||'No school/org'):by==='group'?(c.group||'No group'):leadState(c);
 
-function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImport, onMarkTouch, onSetValue, onEditGroup, onCallAgain, onEdit }) {
+function AdminCallsView({ employees, calls, groups=[], onApprove, onReject, onDelete, onImport, onMarkTouch, onSetValue, onEditGroup, onCallAgain, onEdit }) {
   const [areaCaller,setAreaCaller]=useState('all');
   const [groupBy,setGroupBy]=useState('group');
   const [openState,setOpenState]=useState('');
   const [search,setSearch]=useState('');
+  const [showArchived,setShowArchived]=useState(false);
+  // Archived groups: their leads are parked, so they're split out of every count below.
+  const archivedNames=new Set(groups.filter(g=>g.inactive).map(g=>(g.name||'').trim().toLowerCase()));
+  const isArchived=c=>archivedNames.has((c.group||'').trim().toLowerCase());
+  const liveCalls=calls.filter(c=>!isArchived(c));
   // Awaiting verification = a completed call with proof (a recording OR a signed e-agreement) not yet approved.
   const pending=calls.filter(c=>(c.status==='completed'||c.status==='interested'||c.status==='recorded')&&(c.submittedTake!=null||c.recordingPath||c.agreementId)&&(!c.verifyStatus||c.verifyStatus==='pending'));
   const followUps=calls.filter(c=>c.status==='send_info');
@@ -2985,18 +3022,52 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
 
   const callerIdSet=new Set();
   calls.forEach(c=>{ leadPool(c).forEach(id=>callerIdSet.add(id)); if(c.callerId) callerIdSet.add(c.callerId); });
-  const callerStats=[...callerIdSet].filter(Boolean).map(cid=>{ const list=calls.filter(c=>leadAssignedTo(c,cid));
-    return {cid, name:nameOf(cid), total:list.length, called:list.filter(leadContacted).length, done:list.filter(leadDone).length};
-  }).filter(s=>s.total>0).sort((a,b)=>b.total-a.total);
+  const callerStats=[...callerIdSet].filter(Boolean).map(cid=>{
+    const list=liveCalls.filter(c=>leadAssignedTo(c,cid));
+    const parked=calls.filter(c=>isArchived(c)&&leadAssignedTo(c,cid)).length;
+    return {cid, name:nameOf(cid), total:list.length, called:list.filter(leadContacted).length, done:list.filter(leadDone).length, left:list.filter(c=>!leadContacted(c)).length, parked};
+  }).filter(s=>s.total>0||s.parked>0).sort((a,b)=>b.total-a.total);
+  const unassignedLive=liveCalls.filter(c=>leadPool(c).length===0).length;
+  const archivedCount=calls.length-liveCalls.length;
 
   // Free-text search across the whole lead list (business, contact, phone, email, city, group).
   const q=search.trim().toLowerCase();
   const matchLead=c=>!q||[c.business,c.contact,c.phone,c.email,leadCity(c),c.group,c.location].some(v=>(v||'').toLowerCase().includes(q));
   const areaCalls=(areaCaller==='all'?calls:calls.filter(c=>leadAssignedTo(c,areaCaller))).filter(matchLead);
-  const groupMap={};
-  areaCalls.forEach(c=>{ const k=leadGroup(c,groupBy); (groupMap[k]=groupMap[k]||[]).push(c); });
-  const areas=Object.entries(groupMap).map(([state,list])=>({state,total:list.length,called:list.filter(leadContacted).length,list})).sort((a,b)=>b.total-a.total);
+  const buildAreas=list=>{ const m={}; list.forEach(c=>{ const k=leadGroup(c,groupBy); (m[k]=m[k]||[]).push(c); });
+    return Object.entries(m).map(([state,l])=>({state,total:l.length,called:l.filter(leadContacted).length,list:l})).sort((a,b)=>b.total-a.total); };
+  const areas=buildAreas(areaCalls.filter(c=>!isArchived(c)));
+  const archivedAreas=buildAreas(areaCalls.filter(isArchived));
   const matchCount=q?areaCalls.length:0;
+
+  // One coverage group — dimmed when the group is archived.
+  const renderArea=(a,dim)=>{
+    const pct=a.total?Math.round(a.called/a.total*100):0; const open=(openState===a.state)||!!q;
+    const start=a.list.map(c=>(c.createdAt||'').split('T')[0]).filter(Boolean).sort()[0];
+    const gDue=a.list.find(c=>c.groupDue)?.groupDue||(start?addDays(start,GROUP_DEADLINE_DAYS):null);
+    const left=(!dim&&groupBy==='group'&&gDue)?daysUntil(gDue):null;
+    const done=pct>=100;
+    return (
+      <div key={a.state} style={{borderTop:'0.5px solid var(--color-border-tertiary)',opacity:dim?0.6:1}}>
+        <div onClick={()=>setOpenState(open?'':a.state)} style={{padding:'12px 18px',cursor:'pointer'}}>
+          <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'8px'}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:'500',fontSize:'14px',color:dim?'#64748b':'#0f172a'}}>{a.state}{dim&&<span style={{fontSize:'11px',marginLeft:'8px',color:'#94a3b8'}}>archived</span>}</div>
+              <div style={{fontSize:'12px',color:'#64748b'}}>{a.called} of {a.total} called · {a.total-a.called} left{(()=>{const pool=[...new Set(a.list.flatMap(leadPool))].filter(Boolean);return pool.length?` · ${pool.map(nameOf).join(', ')}`:'';})()}</div>
+            </div>
+            {groupBy==='group'&&<button onClick={e=>{e.stopPropagation();const pool=[...new Set(a.list.flatMap(leadPool))].filter(Boolean);onEditGroup(a.state,{name:a.state==='No group'?'':a.state,callerIds:pool,due:gDue||'',count:a.total});}} style={{...BTN(false),padding:'5px 10px',fontSize:'12px',whiteSpace:'nowrap'}}><Pencil size={12}/>Edit</button>}
+            {left!=null&&!done&&<span style={{fontSize:'12px',fontWeight:'700',color:left<0?'#A32D2D':left<=2?'#854F0B':'#185FA5',whiteSpace:'nowrap'}}>{left<0?`${-left}d overdue`:left===0?'Due today':`${left}d left`}</span>}
+            <div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:dim?'#94a3b8':pct>=50?'#0F6E56':'#854F0B'}}>{pct}%</div>
+            {open?<ChevronUp size={15} color="var(--color-text-secondary)"/>:<ChevronDown size={15} color="var(--color-text-secondary)"/>}
+          </div>
+          <Bar pct={pct} color={dim?'#cbd5e1':pct>=50?'#1D9E75':'#EF9F27'}/>
+        </div>
+        {open&&[...a.list].sort((x,y)=>leadCity(x).localeCompare(leadCity(y))||(x.business||'').localeCompare(y.business||'')).map(c=>(
+          <AdminCoverageLeadRow key={c.id} c={c} groupBy={groupBy} nameOf={nameOf} onSetValue={onSetValue} onDelete={onDelete} onCallAgain={onCallAgain} onEdit={onEdit}/>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -3032,23 +3103,23 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
         </div>
       )}
 
-      {/* Per-caller progress */}
+      {/* Per-caller progress — one tight line each */}
       {callerStats.length>0&&(
         <div style={{...CARD,marginBottom:'16px'}}>
-          <div style={{padding:'13px 18px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}><span style={{fontWeight:'500',fontSize:'14px'}}>Caller progress</span></div>
+          <div style={{display:'flex',alignItems:'center',gap:'8px',padding:'11px 16px',borderBottom:'0.5px solid var(--color-border-tertiary)',flexWrap:'wrap'}}>
+            <span style={{fontWeight:'500',fontSize:'14px'}}>Caller progress</span>
+            <span style={{fontSize:'12px',color:'#64748b'}}>{liveCalls.length} active lead{liveCalls.length===1?'':'s'}{unassignedLive>0?` · ${unassignedLive} unassigned`:''}{archivedCount>0?` · ${archivedCount} archived`:''}</span>
+          </div>
           {callerStats.map(s=>{
             const pct=s.total?Math.round(s.called/s.total*100):0;
             return (
-              <div key={s.cid} style={{padding:'13px 18px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
-                <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'8px'}}>
-                  <div style={{width:'32px',height:'32px',borderRadius:'50%',background:'var(--color-background-info)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'12px',fontWeight:'500',color:'var(--color-text-info)',flexShrink:0}}>{initials(s.name)}</div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontWeight:'500',fontSize:'14px'}}>{s.name}</div>
-                    <div style={{fontSize:'12px',color:'#64748b'}}>{s.called} of {s.total} called · {s.done} completed · {s.total-s.called} left</div>
-                  </div>
-                  <div style={{fontFamily:'var(--font-mono)',fontSize:'15px',fontWeight:'500',color:'#0F6E56'}}>{pct}%</div>
+              <div key={s.cid} style={{display:'grid',gridTemplateColumns:'1fr 120px 54px',gap:'12px',alignItems:'center',padding:'9px 16px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+                <div style={{minWidth:0}}>
+                  <span style={{fontWeight:'500',fontSize:'13.5px'}}>{s.name}</span>
+                  <span style={{fontSize:'12px',color:'#64748b',marginLeft:'8px'}}>{s.left} to call · {s.done} secured{s.parked>0?` · ${s.parked} archived`:''}</span>
                 </div>
                 <Bar pct={pct}/>
+                <div style={{fontFamily:'var(--font-mono)',fontSize:'13px',fontWeight:'600',color:pct>=50?'#0F6E56':'#854F0B',textAlign:'right'}}>{pct}%</div>
               </div>
             );
           })}
@@ -3078,33 +3149,18 @@ function AdminCallsView({ employees, calls, onApprove, onReject, onDelete, onImp
         </div>
         {areas.length===0?(
           <div style={{padding:'40px',textAlign:'center',color:'#64748b',fontSize:'13px'}}>{q?'No leads match your search.':'No leads yet. Use “Import leads” or “Assign call” to add some.'}</div>
-        ):areas.map(a=>{
-          const pct=a.total?Math.round(a.called/a.total*100):0; const open=(openState===a.state)||!!q;
-          const start=a.list.map(c=>(c.createdAt||'').split('T')[0]).filter(Boolean).sort()[0];
-          const gDue=a.list.find(c=>c.groupDue)?.groupDue||(start?addDays(start,GROUP_DEADLINE_DAYS):null);
-          const left=(groupBy==='group'&&gDue)?daysUntil(gDue):null;
-          const done=pct>=100;
-          return (
-            <div key={a.state} style={{borderTop:'0.5px solid var(--color-border-tertiary)'}}>
-              <div onClick={()=>setOpenState(open?'':a.state)} style={{padding:'12px 18px',cursor:'pointer'}}>
-                <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'8px'}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontWeight:'500',fontSize:'14px'}}>{a.state}</div>
-                    <div style={{fontSize:'12px',color:'#64748b'}}>{a.called} of {a.total} called · {a.total-a.called} left{(()=>{const pool=[...new Set(a.list.flatMap(leadPool))].filter(Boolean);return pool.length?` · ${pool.map(nameOf).join(', ')}`:'';})()}</div>
-                  </div>
-                  {groupBy==='group'&&<button onClick={e=>{e.stopPropagation();const pool=[...new Set(a.list.flatMap(leadPool))].filter(Boolean);onEditGroup(a.state,{name:a.state==='No group'?'':a.state,callerIds:pool,due:gDue||'',count:a.total});}} style={{...BTN(false),padding:'5px 10px',fontSize:'12px',whiteSpace:'nowrap'}}><Pencil size={12}/>Edit</button>}
-                  {left!=null&&!done&&<span style={{fontSize:'12px',fontWeight:'700',color:left<0?'#A32D2D':left<=2?'#854F0B':'#185FA5',whiteSpace:'nowrap'}}>{left<0?`${-left}d overdue`:left===0?'Due today':`${left}d left`}</span>}
-                  <div style={{fontFamily:'var(--font-mono)',fontSize:'14px',fontWeight:'500',color:pct>=50?'#0F6E56':'#854F0B'}}>{pct}%</div>
-                  {open?<ChevronUp size={15} color="var(--color-text-secondary)"/>:<ChevronDown size={15} color="var(--color-text-secondary)"/>}
-                </div>
-                <Bar pct={pct} color={pct>=50?'#1D9E75':'#EF9F27'}/>
-              </div>
-              {open&&[...a.list].sort((x,y)=>leadCity(x).localeCompare(leadCity(y))||(x.business||'').localeCompare(y.business||'')).map(c=>(
-                <AdminCoverageLeadRow key={c.id} c={c} groupBy={groupBy} nameOf={nameOf} onSetValue={onSetValue} onDelete={onDelete} onCallAgain={onCallAgain} onEdit={onEdit}/>
-              ))}
+        ):areas.map(a=>renderArea(a,false))}
+        {archivedAreas.length>0&&(
+          <div style={{borderTop:'0.5px solid var(--color-border-tertiary)'}}>
+            <div onClick={()=>setShowArchived(v=>!v)} style={{display:'flex',alignItems:'center',gap:'10px',padding:'11px 18px',cursor:'pointer',background:'var(--color-background-secondary)'}}>
+              {showArchived?<ChevronUp size={15} color="var(--color-text-secondary)"/>:<ChevronDown size={15} color="var(--color-text-secondary)"/>}
+              <span style={{fontWeight:'600',fontSize:'13px',color:'#64748b'}}>Inactive / archived groups</span>
+              <Badge color="gray">{archivedAreas.reduce((n,a)=>n+a.total,0)}</Badge>
+              <span style={{fontSize:'11.5px',color:'#94a3b8'}}>parked — hidden from callers, kept for later</span>
             </div>
-          );
-        })}
+            {showArchived&&archivedAreas.map(a=>renderArea(a,true))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3812,7 +3868,7 @@ export default function TailgatePayday() {
       {tab==='reps'&&<MerchantRepsView employees={employees} assignments={assignments} onAddPeriod={()=>setModal({type:'addPeriod'})} onImportCSV={()=>setModal({type:'importCSV'})} onTogglePaid={togglePeriodPaid} onDeletePeriod={deletePeriod} onPayStub={(emp,p)=>setModal({type:'payStub',data:{emp,p}})}/>}
       {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
       {tab==='payroll'&&<PayrollView employees={employees} deals={deals} assignments={assignments}/>}
-      {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})} onEditGroup={(groupKey,data)=>setModal({type:'editGroup',data:{groupKey,...data}})} onCallAgain={callAgainNow} onEdit={c=>setModal({type:'editLead',data:c})}/>}
+      {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} groups={groups} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})} onEditGroup={(groupKey,data)=>setModal({type:'editGroup',data:{groupKey,...data}})} onCallAgain={callAgainNow} onEdit={c=>setModal({type:'editLead',data:c})}/>}
       {tab==='groups'&&<AdminGroupsView groups={groups} calls={calls} onAdd={()=>setModal({type:'groupMeta'})} onEdit={g=>setModal({type:'groupMeta',data:g})} onDelete={deleteGroupMeta} onToggleActive={toggleGroupActive}/>}
       {tab==='discounts'&&<AdminDiscountsView employees={employees} calls={calls}/>}
       {tab==='analytics'&&<AdminAnalyticsView employees={employees} events={events} timeclock={timeclock} calls={calls}/>}
