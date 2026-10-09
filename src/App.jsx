@@ -306,7 +306,9 @@ function EmployeePortal({employees,deals,assignments,calls,orgs,groups=[],timecl
     </div>
   );
 
-  const myCalls = calls.filter(c=>leadVisibleTo(c,emp.id));
+  // Archived groups drop off the caller side entirely — the data stays for when we pick them back up.
+  const archivedGroups=new Set((groups||[]).filter(g=>g.inactive).map(g=>(g.name||'').trim().toLowerCase()));
+  const myCalls = calls.filter(c=>leadVisibleTo(c,emp.id)&&!archivedGroups.has((c.group||'').trim().toLowerCase()));
   const queueCount = myCalls.filter(c=>{const s=effectiveStatus(c);return s==='follow_up'||s==='to_call'||s==='no_answer';}).length;
   const logCall = myCalls.find(c=>c.id===logId); // derived fresh so recordings update live
   const TABS=[['home','My Leads',Building2],['crm','CRM',Users],['agreements','Agreements',FileText],['payouts','Payouts',DollarSign]];
@@ -2638,6 +2640,10 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
 // Rows/sections for the admin Groups page (module-level so they aren't recreated each render).
 function AdminGroupRow({ r, dim, onToggleActive, onEdit, onDelete }) {
   const stats=groupSecuredStats(r.leads);
+  // Prefer the group's own city/state; otherwise show where its leads actually are.
+  const defPlace=[r.def?.city,r.def?.state].filter(Boolean).join(', ');
+  const leadPlaces=[...new Set(r.leads.map(c=>[leadCity(c),leadState(c)].filter(Boolean).join(', ')).filter(Boolean))];
+  const place=defPlace||(leadPlaces.length?leadPlaces.slice(0,2).join(' · ')+(leadPlaces.length>2?` +${leadPlaces.length-2}`:''):'');
   return (
     <div style={{display:'flex',alignItems:'center',gap:'12px',padding:'12px 16px',borderTop:'0.5px solid var(--color-border-tertiary)',opacity:dim?0.7:1}}>
       {r.def?.logoUrl
@@ -2645,7 +2651,7 @@ function AdminGroupRow({ r, dim, onToggleActive, onEdit, onDelete }) {
         : <div style={{width:'40px',height:'40px',borderRadius:'8px',background:r.def&&!dim?'#101f6b':'var(--color-background-secondary)',color:r.def&&!dim?'#fff':'#94a3b8',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700',fontSize:'13px',flexShrink:0,border:r.def?'none':'1px dashed var(--color-border-secondary)'}}>{initials(r.name)}</div>}
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontWeight:'500',fontSize:'14px'}}>{r.name}{!r.def&&<span style={{fontSize:'11px',color:'#854F0B',marginLeft:'8px'}}>no logo yet</span>}</div>
-        <div style={{fontSize:'12px',color:'#64748b'}}>{r.leads.length} lead{r.leads.length===1?'':'s'} &middot; {stats.secured} secured &middot; {fmt$(stats.cardValue)} value</div>
+        <div style={{fontSize:'12px',color:'#64748b'}}>{place&&<><MapPin size={10} style={{verticalAlign:'-1px'}}/> {place}{defPlace?'':' (from leads)'} &middot; </>}{r.leads.length} lead{r.leads.length===1?'':'s'} &middot; {stats.secured} secured &middot; {fmt$(stats.cardValue)} value</div>
       </div>
       {onToggleActive&&<button style={{...BTN(false),padding:'5px 10px',fontSize:'12px'}} onClick={()=>onToggleActive(r.def,r.name)} title={dim?'Move back to active':'Archive this group'}>{dim?'Reactivate':'Mark inactive'}</button>}
       <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px'}} onClick={()=>onEdit(r.def||{name:r.name})}><Pencil size={12}/>{r.def?'Edit':'Add logo'}</button>
@@ -2704,6 +2710,8 @@ function AdminGroupsView({ groups, calls, onAdd, onEdit, onDelete, onToggleActiv
 const GROUP_LOGO_BUCKET = 'group-logos';
 function GroupMetaModal({ group, onSave, onClose }) {
   const [name,setName]=useState(group?.name||'');
+  const [city,setCity]=useState(group?.city||'');
+  const [state,setState]=useState(group?.state||'');
   const [logoUrl,setLogoUrl]=useState(group?.logoUrl||'');
   const [uploading,setUploading]=useState(false); const [err,setErr]=useState('');
   const fileRef=useRef(null);
@@ -2724,6 +2732,10 @@ function GroupMetaModal({ group, onSave, onClose }) {
   return (
     <ModalWrap title={group?.id?'Edit group':'Add group'} onClose={onClose}>
       <Field label="Group / organization name"><input style={INP} value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. South Carolina IFC" autoFocus/></Field>
+      <div style={{display:'grid',gridTemplateColumns:'2fr 1fr',gap:'10px'}}>
+        <Field label="City / town"><input style={INP} value={city} onChange={e=>setCity(e.target.value)} placeholder="e.g. Bowling Green"/></Field>
+        <Field label="State"><input style={INP} value={state} onChange={e=>setState(e.target.value)} placeholder="KY"/></Field>
+      </div>
       <label style={{display:'block',fontSize:'12px',color:'var(--color-text-secondary)',marginBottom:'6px',fontWeight:'500'}}>Logo</label>
       <div style={{display:'flex',alignItems:'center',gap:'12px',marginBottom:'14px'}}>
         {logoUrl
@@ -2738,7 +2750,7 @@ function GroupMetaModal({ group, onSave, onClose }) {
       {err&&<div style={{fontSize:'12px',color:'#A32D2D',marginBottom:'12px'}}>{err}</div>}
       <div style={{display:'flex',gap:'8px',justifyContent:'flex-end'}}>
         <button style={BTN(false)} onClick={onClose}>Cancel</button>
-        <button style={{...BTN(true),opacity:name.trim()?1:0.5}} disabled={!name.trim()} onClick={()=>onSave({...(group?.id?{id:group.id}:{}),name,logoUrl})}>Save group</button>
+        <button style={{...BTN(true),opacity:name.trim()?1:0.5}} disabled={!name.trim()} onClick={()=>onSave({...(group?.id?{id:group.id}:{}),name,city,state,logoUrl})}>Save group</button>
       </div>
     </ModalWrap>
   );
@@ -3631,10 +3643,10 @@ export default function TailgatePayday() {
     const name=(g.name||'').trim(); if(!name) return;
     if(g.id){
       const prev=groups.find(x=>x.id===g.id);
-      setG(groups.map(x=>x.id===g.id?{...x,name,logoUrl:g.logoUrl||''}:x));
+      setG(groups.map(x=>x.id===g.id?{...x,name,logoUrl:g.logoUrl||'',city:(g.city||'').trim(),state:(g.state||'').trim()}:x));
       if(prev&&prev.name!==name) setC(calls.map(c=>((c.group||'')===prev.name)?{...c,group:name}:c));
     } else {
-      setG([...groups,{id:genId(),name,logoUrl:g.logoUrl||'',createdAt:new Date().toISOString()}]);
+      setG([...groups,{id:genId(),name,logoUrl:g.logoUrl||'',city:(g.city||'').trim(),state:(g.state||'').trim(),createdAt:new Date().toISOString()}]);
     }
     setModal(null);
   };
