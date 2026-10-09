@@ -2635,18 +2635,54 @@ function VerifyRow({ call, callerName, onApprove, onReject }) {
 }
 
 // ── Super-admin: persistent Groups with logos (Phase 3.2) ──
-function AdminGroupsView({ groups, calls, onAdd, onEdit, onDelete }) {
+// Rows/sections for the admin Groups page (module-level so they aren't recreated each render).
+function AdminGroupRow({ r, dim, onToggleActive, onEdit, onDelete }) {
+  const stats=groupSecuredStats(r.leads);
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:'12px',padding:'12px 16px',borderTop:'0.5px solid var(--color-border-tertiary)',opacity:dim?0.7:1}}>
+      {r.def?.logoUrl
+        ? <img src={r.def.logoUrl} alt="" style={{width:'40px',height:'40px',borderRadius:'8px',objectFit:'cover',flexShrink:0,background:'#fff',border:'0.5px solid var(--color-border-tertiary)',filter:dim?'grayscale(1)':'none'}}/>
+        : <div style={{width:'40px',height:'40px',borderRadius:'8px',background:r.def&&!dim?'#101f6b':'var(--color-background-secondary)',color:r.def&&!dim?'#fff':'#94a3b8',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700',fontSize:'13px',flexShrink:0,border:r.def?'none':'1px dashed var(--color-border-secondary)'}}>{initials(r.name)}</div>}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontWeight:'500',fontSize:'14px'}}>{r.name}{!r.def&&<span style={{fontSize:'11px',color:'#854F0B',marginLeft:'8px'}}>no logo yet</span>}</div>
+        <div style={{fontSize:'12px',color:'#64748b'}}>{r.leads.length} lead{r.leads.length===1?'':'s'} &middot; {stats.secured} secured &middot; {fmt$(stats.cardValue)} value</div>
+      </div>
+      {onToggleActive&&<button style={{...BTN(false),padding:'5px 10px',fontSize:'12px'}} onClick={()=>onToggleActive(r.def,r.name)} title={dim?'Move back to active':'Archive this group'}>{dim?'Reactivate':'Mark inactive'}</button>}
+      <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px'}} onClick={()=>onEdit(r.def||{name:r.name})}><Pencil size={12}/>{r.def?'Edit':'Add logo'}</button>
+      {r.def&&<button onClick={()=>onDelete(r.def.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}} title="Remove group definition (leads keep their name)"><Trash2 size={12}/></button>}
+    </div>
+  );
+}
+function AdminGroupSection({ title, list, open, toggle, dim, empty, onToggleActive, onEdit, onDelete }) {
+  return (
+    <div style={{...CARD,marginBottom:'12px'}}>
+      <div onClick={toggle} style={{display:'flex',alignItems:'center',gap:'10px',padding:'12px 16px',cursor:'pointer',background:dim?'var(--color-background-secondary)':'transparent'}}>
+        {open?<ChevronUp size={15} color="var(--color-text-secondary)"/>:<ChevronDown size={15} color="var(--color-text-secondary)"/>}
+        <span style={{fontWeight:'600',fontSize:'14px',color:dim?'#64748b':'#0f172a'}}>{title}</span>
+        <Badge color={dim?'gray':'teal'}>{list.length}</Badge>
+      </div>
+      {open&&(list.length===0
+        ? <div style={{padding:'24px',textAlign:'center',color:'#64748b',fontSize:'13px',borderTop:'0.5px solid var(--color-border-tertiary)'}}>{empty}</div>
+        : list.map(r=><AdminGroupRow key={r.name} r={r} dim={dim} onToggleActive={onToggleActive} onEdit={onEdit} onDelete={onDelete}/>))}
+    </div>
+  );
+}
+function AdminGroupsView({ groups, calls, onAdd, onEdit, onDelete, onToggleActive }) {
+  const [showInactive,setShowInactive]=useState(false);
+  const [showActive,setShowActive]=useState(true);
   // Every group the app knows about: explicit definitions + any name that only exists on leads.
   const byName={};
   groups.forEach(g=>{ byName[(g.name||'').trim().toLowerCase()]={def:g,name:g.name,leads:[]}; });
   calls.forEach(c=>{ const nm=(c.group||'').trim(); if(!nm) return; const k=nm.toLowerCase(); (byName[k]=byName[k]||{def:null,name:nm,leads:[]}).leads.push(c); });
   const rows=Object.values(byName).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  const active=rows.filter(r=>!r.def?.inactive), inactive=rows.filter(r=>r.def?.inactive);
+
   return (
     <div>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:'16px',gap:'10px',flexWrap:'wrap'}}>
         <div>
           <h3 style={{margin:0,fontSize:'16px',fontWeight:'500'}}>Groups</h3>
-          <div style={{fontSize:'13px',color:'#64748b',marginTop:'2px'}}>The fundraising partners you call for. Add a logo so callers see it on their leads. Renaming updates every lead in the group.</div>
+          <div style={{fontSize:'13px',color:'#64748b',marginTop:'2px'}}>The fundraising partners you call for. Mark finished campaigns inactive to get them out of the way &mdash; their leads and history stay intact.</div>
         </div>
         <button style={BTN(true)} onClick={onAdd}><Plus size={14}/>Add group</button>
       </div>
@@ -2657,26 +2693,10 @@ function AdminGroupsView({ groups, calls, onAdd, onEdit, onDelete }) {
           <div style={{fontSize:'13px',marginBottom:'16px'}}>Add a group, then assign leads to it when you import.</div>
           <button style={BTN(true)} onClick={onAdd}><Plus size={14}/>Add first group</button>
         </div>
-      ):(
-        <div style={CARD}>
-          {rows.map(r=>{
-            const stats=groupSecuredStats(r.leads);
-            return (
-              <div key={r.name} style={{display:'flex',alignItems:'center',gap:'12px',padding:'12px 16px',borderBottom:'0.5px solid var(--color-border-tertiary)'}}>
-                {r.def?.logoUrl
-                  ? <img src={r.def.logoUrl} alt="" style={{width:'40px',height:'40px',borderRadius:'8px',objectFit:'cover',flexShrink:0,background:'#fff',border:'0.5px solid var(--color-border-tertiary)'}}/>
-                  : <div style={{width:'40px',height:'40px',borderRadius:'8px',background:r.def?'#101f6b':'var(--color-background-secondary)',color:r.def?'#fff':'#94a3b8',display:'flex',alignItems:'center',justifyContent:'center',fontWeight:'700',fontSize:'13px',flexShrink:0,border:r.def?'none':'1px dashed var(--color-border-secondary)'}}>{initials(r.name)}</div>}
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontWeight:'500',fontSize:'14px'}}>{r.name}{!r.def&&<span style={{fontSize:'11px',color:'#854F0B',marginLeft:'8px'}}>no logo yet</span>}</div>
-                  <div style={{fontSize:'12px',color:'#64748b'}}>{r.leads.length} lead{r.leads.length===1?'':'s'} · {stats.secured} secured · {fmt$(stats.cardValue)} value</div>
-                </div>
-                <button style={{...BTN(false),padding:'5px 10px',fontSize:'12px'}} onClick={()=>onEdit(r.def||{name:r.name})}><Pencil size={12}/>{r.def?'Edit':'Add logo'}</button>
-                {r.def&&<button onClick={()=>onDelete(r.def.id)} style={{...BTN(false),padding:'5px 8px',color:'var(--color-text-danger)',borderColor:'var(--color-border-danger)'}} title="Remove group definition (leads keep their name)"><Trash2 size={12}/></button>}
-              </div>
-            );
-          })}
-        </div>
-      )}
+      ):(<>
+        <AdminGroupSection title="Active groups" list={active} open={showActive} toggle={()=>setShowActive(v=>!v)} dim={false} empty="Nothing active right now." onToggleActive={onToggleActive} onEdit={onEdit} onDelete={onDelete}/>
+        <AdminGroupSection title="Inactive / archived" list={inactive} open={showInactive} toggle={()=>setShowInactive(v=>!v)} dim={true} empty="Nothing archived yet. Use “Mark inactive” on a finished campaign." onToggleActive={onToggleActive} onEdit={onEdit} onDelete={onDelete}/>
+      </>)}
     </div>
   );
 }
@@ -3320,7 +3340,9 @@ function LeadImportModal({ employees, existing=[], groups=[], onImport, onClose 
   const matchedGroupId=(groups.find(g=>(g.name||'').trim().toLowerCase()===groupName.toLowerCase())||{}).id||null;
   // Every group name the app already knows — defined groups (po_groups) plus any name that lives only on a lead —
   // so a batch can be added to an EXISTING group, not just a new one.
-  const existingGroupNames=[...new Set([...groups.map(g=>g.name),...existing.map(c=>c.group)].map(s=>(s||'').trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const archived=new Set(groups.filter(g=>g.inactive).map(g=>(g.name||'').trim().toLowerCase()));
+  const existingGroupNames=[...new Set([...groups.filter(g=>!g.inactive).map(g=>g.name),...existing.map(c=>c.group)].map(s=>(s||'').trim()).filter(Boolean))]
+    .filter(n=>!archived.has(n.toLowerCase())).sort((a,b)=>a.localeCompare(b));
   // Callers who already work this group — new leads inherit them when none are picked below.
   const inheritedCallerIds=groupName?[...new Set(existing.filter(c=>(c.group||'').trim().toLowerCase()===groupName.toLowerCase()).flatMap(leadPool))].filter(Boolean):[];
   const inheritedNames=inheritedCallerIds.map(id=>employees.find(e=>e.id===id)?.name).filter(Boolean);
@@ -3617,6 +3639,11 @@ export default function TailgatePayday() {
     setModal(null);
   };
   const deleteGroupMeta=id=>setG(groups.filter(g=>g.id!==id));
+  // Archive / restore a group. A lead-only group has no definition yet, so flagging it creates one.
+  const toggleGroupActive=(def,name)=>{
+    if(def) setG(groups.map(g=>g.id===def.id?{...g,inactive:!g.inactive}:g));
+    else setG([...groups,{id:genId(),name:(name||'').trim(),logoUrl:'',inactive:true,createdAt:new Date().toISOString()}]);
+  };
   const addOrg=o=>{ setO([...orgs,{...o,id:genId(),createdAt:new Date().toISOString()}]); setModal(null); };
   const deleteOrg=id=>setO(orgs.filter(o=>o.id!==id));
   // A signed-in user with no roster match — log it once so the admin can add them
@@ -3774,7 +3801,7 @@ export default function TailgatePayday() {
       {tab==='payments'&&<PaymentQueue employees={employees} deals={deals} assignments={assignments} onMarkDealPaid={markDealPaid} onMarkPeriodPaid={togglePeriodPaid}/>}
       {tab==='payroll'&&<PayrollView employees={employees} deals={deals} assignments={assignments}/>}
       {tab==='calls'&&<AdminCallsView employees={employees} calls={calls} onApprove={approveCall} onReject={rejectCall} onDelete={deleteCall} onImport={()=>setModal({type:'importLeads'})} onMarkTouch={markTouch} onSetValue={(id,value)=>updateCall(id,{value})} onEditGroup={(groupKey,data)=>setModal({type:'editGroup',data:{groupKey,...data}})} onCallAgain={callAgainNow} onEdit={c=>setModal({type:'editLead',data:c})}/>}
-      {tab==='groups'&&<AdminGroupsView groups={groups} calls={calls} onAdd={()=>setModal({type:'groupMeta'})} onEdit={g=>setModal({type:'groupMeta',data:g})} onDelete={deleteGroupMeta}/>}
+      {tab==='groups'&&<AdminGroupsView groups={groups} calls={calls} onAdd={()=>setModal({type:'groupMeta'})} onEdit={g=>setModal({type:'groupMeta',data:g})} onDelete={deleteGroupMeta} onToggleActive={toggleGroupActive}/>}
       {tab==='discounts'&&<AdminDiscountsView employees={employees} calls={calls}/>}
       {tab==='analytics'&&<AdminAnalyticsView employees={employees} events={events} timeclock={timeclock} calls={calls}/>}
 
